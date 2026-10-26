@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { DateTime } from 'luxon';
 import { parseEmbed, DRAW_AUTHOR } from './parse.js';
 import { Batcher } from './batcher.js';
@@ -85,7 +85,12 @@ const batcher = new Batcher({
   },
 });
 
-client.on('messageCreate', async (message) => {
+// Without these, a bad token or a dropped gateway connection is silent and the
+// service just sits there looking healthy.
+client.on(Events.Error, (err) => console.error('discord client error:', err.message));
+client.on(Events.Warn, (msg) => console.warn('discord warning:', msg));
+
+client.on(Events.MessageCreate, async (message) => {
   if (message.channelId !== WALMART_CHANNEL_ID) return;
   if (!message.embeds?.length) return;
 
@@ -112,7 +117,7 @@ client.on('messageCreate', async (message) => {
   }
 });
 
-client.once('clientReady', (c) => {
+client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
   console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
 });
@@ -135,4 +140,10 @@ try {
   process.exit(1);
 }
 
-client.login(DISCORD_TOKEN);
+try {
+  await client.login(DISCORD_TOKEN);
+} catch (err) {
+  console.error('could not log in to Discord:', err.message);
+  console.error('this is almost always a bad or reset DISCORD_TOKEN');
+  process.exit(1);
+}

@@ -102,6 +102,41 @@ If you skip this, everything else still runs. Images get downloaded, trimmed
 and stored, and the run summary says no public URL is configured yet. Nothing
 breaks, the images just are not reachable from outside until you do it.
 
+## Stage three: connecting Canva
+
+Add two variables in Railway, both taken from your Canva app's Credentials
+section:
+
+```
+CANVA_CLIENT_ID
+CANVA_CLIENT_SECRET
+```
+
+In the Canva Developer Portal, under Outside Canva then Redirect URLs, set
+URL 1 to your Railway domain followed by `/oauth/redirect`, for example:
+
+```
+https://pokefinder-draws-production.up.railway.app/oauth/redirect
+```
+
+After the service restarts, open the Deploy Logs. You will see:
+
+```
+CANVA IS NOT CONNECTED YET. Open this once, in a browser, and approve:
+  https://your-domain.up.railway.app/canva/connect?key=3f9a...
+```
+
+Open that link, approve on Canva's own screen, and you should land on a page
+saying the refresh token is stored. That is the whole of it. Restart the
+service and the logs will now read `canva is connected`.
+
+You only ever do this once. Canva rotates its refresh tokens on every use and
+the service handles that by itself.
+
+The key in that URL changes every time the service restarts, so if the link
+stops working just take the current one from the latest logs. You can pin it by
+setting a `SETUP_KEY` variable, but there is no need.
+
 ## Changing it later
 
 When I send you new files, go to the repo on GitHub, click **Add file** then

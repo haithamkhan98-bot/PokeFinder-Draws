@@ -102,3 +102,20 @@ export async function getImage(id) {
 export async function setRunImage(runId, imageUrl) {
   await pool.query('UPDATE draw_runs SET image_url = $2 WHERE id = $1', [runId, imageUrl]);
 }
+
+export async function getSecret(key) {
+  const { rows } = await pool.query('SELECT value FROM secrets WHERE key = $1', [key]);
+  return rows[0]?.value ?? null;
+}
+
+export async function setSecret(key, value) {
+  await pool.query(
+    `INSERT INTO secrets (key, value, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+    [key, value],
+  );
+}
+
+export async function deleteSecret(key) {
+  await pool.query('DELETE FROM secrets WHERE key = $1', [key]);
+}

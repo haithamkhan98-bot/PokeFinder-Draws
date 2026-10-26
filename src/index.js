@@ -4,7 +4,8 @@ import { parseEmbed, DRAW_AUTHOR } from './parse.js';
 import { Batcher } from './batcher.js';
 import { saveRun, pool, migrate, storeImage } from './db.js';
 import { fetchAndTrim } from './image.js';
-import { startServer, imageUrl, publicBaseUrl } from './server.js';
+import { startServer, imageUrl, publicBaseUrl, setupKey } from './server.js';
+import { isConnected as canvaConnected } from './canva.js';
 
 const {
   DISCORD_TOKEN,
@@ -167,6 +168,18 @@ try {
   console.log(base
     ? `images will be served from ${base}/images/`
     : 'no public domain yet, so image URLs cannot be built. Generate one in Railway under Settings, Networking.');
+
+  // Canva has to be authorised once, by hand, in a browser. Print the link
+  // here rather than anywhere public, since this log is the only place the
+  // setup key appears.
+  if (process.env.CANVA_CLIENT_ID && base) {
+    if (await canvaConnected().catch(() => false)) {
+      console.log('canva is connected');
+    } else {
+      console.log('CANVA IS NOT CONNECTED YET. Open this once, in a browser, and approve:');
+      console.log(`  ${base}/canva/connect?key=${setupKey}`);
+    }
+  }
 } catch (err) {
   console.error('could not apply the database schema:', err.message);
   process.exit(1);

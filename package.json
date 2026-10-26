@@ -1,0 +1,19 @@
+{
+  "name": "pokefinder-draws",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Walmart draw automation for PokeFinder: stage one, embed parser and run records",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "migrate": "node src/migrate.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "discord.js": "14.16.3",
+    "luxon": "3.5.0",
+    "pg": "8.13.1"
+  }
+}

@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 const { Pool } = pg;
@@ -73,4 +74,31 @@ export async function saveRun({ drawDate, items, startsAt, endsAt }) {
 export async function markError(runId, message) {
   await pool.query('UPDATE draw_runs SET status = $2, error = $3 WHERE id = $1',
     [runId, 'error', String(message).slice(0, 2000)]);
+}
+
+/**
+ * Store an image and return its id.
+ *
+ * The id is a content hash, so the same bytes always produce the same URL and
+ * storing twice is free. It also means a URL can never silently start pointing
+ * at a different picture.
+ */
+export async function storeImage(buffer, { runId = null, pid = null, kind = 'product', mime = 'image/png', width = null, height = null } = {}) {
+  const id = createHash('sha256').update(buffer).digest('hex').slice(0, 32);
+  await pool.query(
+    `INSERT INTO draw_images (id, run_id, pid, kind, mime, bytes, width, height)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET run_id = COALESCE(EXCLUDED.run_id, draw_images.run_id)`,
+    [id, runId, pid, kind, mime, buffer, width, height],
+  );
+  return id;
+}
+
+export async function getImage(id) {
+  const { rows } = await pool.query('SELECT bytes, mime FROM draw_images WHERE id = $1', [id]);
+  return rows[0] ?? null;
+}
+
+export async function setRunImage(runId, imageUrl) {
+  await pool.query('UPDATE draw_runs SET image_url = $2 WHERE id = $1', [runId, imageUrl]);
 }

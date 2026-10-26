@@ -58,10 +58,34 @@ alert channel rather than scheduled. A wrong time is worse than a missed one.
 **Non Pokemon and repack items are separated, not dropped silently.** They are
 counted in the run summary so you can see what was skipped and why.
 
+## Stage two: images
+
+When a run fires, each product photo is downloaded from the Walmart CDN,
+trimmed to its content, and stored. The run summary lists a URL per item.
+
+**Why the trim.** Retailers pad product shots with a wide white margin. Scale
+that into a grid slot and you scale the padding, so the product looks small and
+the image reads as sparse. Cropping to the content first means the slot is
+filled by the product. The threshold matches the browser side trim that
+produced the hand built draw images, so output is consistent with what came
+before.
+
+**Why the images live in Postgres.** Railway gives the container a fresh
+filesystem on every deploy. Buffer fetches an image when the post SENDS, not
+when it is scheduled, which can be days later, so an image that disappears on
+redeploy would break a queued post exactly the way the Canva links did. Keeping
+them in the database also avoids setting up a volume.
+
+**Why the URL is a content hash.** The same bytes always produce the same URL,
+and a URL can never quietly start pointing at a different picture. It also means
+the files can be cached forever.
+
 ## Not done yet
 
-Stage two is the image pipeline: download the thumbnail, run the whitespace
-trim, and serve the result from a permanent URL on this service. That last part
-is what stops the Buffer media failures, because Buffer fetches the image when
-the post sends, not when it is scheduled. No Buffer call should ever carry a
+Stage three is Canva: five brand templates, one per item count, filled by
+autofill rather than by forking a previous design. Stage four is the agent that
+writes and posts. Stage five is switching from drafts to publishing.
+
+The rule that must survive all of them: no Buffer post may ever carry a URL
+that can expire. That means the image comes from this service, never from a
 Canva export link.

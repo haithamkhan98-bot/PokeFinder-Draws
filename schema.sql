@@ -55,3 +55,21 @@ CREATE TABLE IF NOT EXISTS secrets (
 
 CREATE INDEX IF NOT EXISTS draw_items_run_idx   ON draw_items(run_id);
 CREATE INDEX IF NOT EXISTS buffer_posts_run_idx ON buffer_posts(run_id);
+
+-- Draw images live in the database rather than on disk. Railway containers get
+-- a fresh filesystem on every deploy, and these have to stay reachable for days
+-- because Buffer fetches the image when a post SENDS, not when it is scheduled.
+-- Keeping them here means a redeploy cannot break a queued post.
+CREATE TABLE IF NOT EXISTS draw_images (
+  id         TEXT PRIMARY KEY,
+  run_id     BIGINT REFERENCES draw_runs(id) ON DELETE SET NULL,
+  pid        TEXT,
+  kind       TEXT        NOT NULL,
+  mime       TEXT        NOT NULL,
+  bytes      BYTEA       NOT NULL,
+  width      INTEGER,
+  height     INTEGER,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS draw_images_run_idx ON draw_images(run_id);

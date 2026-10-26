@@ -73,6 +73,35 @@ Message Content intent on the Discord bot page, which has to be on or the
 embeds arrive empty. Second most likely is the bot not having permission to
 post in the alert channel.
 
+## Stage two: turn on the public domain
+
+Stage two added a small web server that hosts the draw images, so the service
+now needs an address on the internet. This was pointless before, because
+nothing was listening.
+
+1. Click the **PokeFinder-Draws** service box to open its panel.
+2. Open the **Settings** tab inside that panel, not the project settings from
+   the top bar.
+3. Scroll to **Networking**, or **Public Networking**, and click
+   **Generate Domain**.
+4. If it asks for a port, enter `3000`.
+
+Railway gives you something like `pokefinder-draws-production.up.railway.app`
+and sets it as `RAILWAY_PUBLIC_DOMAIN` by itself, so there is no variable to
+add. The service picks it up on the next restart.
+
+Check it worked by opening the domain in a browser. It should say `ok`. The
+logs will also now read:
+
+```
+image server listening on port 3000
+images will be served from https://your-domain.up.railway.app/images/
+```
+
+If you skip this, everything else still runs. Images get downloaded, trimmed
+and stored, and the run summary says no public URL is configured yet. Nothing
+breaks, the images just are not reachable from outside until you do it.
+
 ## Changing it later
 
 When I send you new files, go to the repo on GitHub, click **Add file** then

@@ -2,7 +2,9 @@ import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { DateTime } from 'luxon';
 import { parseEmbed, DRAW_AUTHOR } from './parse.js';
 import { Batcher } from './batcher.js';
-import { saveRun, pool, migrate } from './db.js';
+import { saveRun, pool, migrate, storeImage } from './db.js';
+import { fetchAndTrim } from './image.js';
+import { startServer, imageUrl, publicBaseUrl } from './server.js';
 
 const {
   DISCORD_TOKEN,
@@ -65,6 +67,30 @@ const batcher = new Batcher({
         return;
       }
 
+      // Host each product photo so later stages never hand Buffer a URL that
+      // can expire. Failures here are reported but do not sink the run: the
+      // items and the window are already recorded.
+      const images = [];
+      for (const item of usable) {
+        if (!item.imageUrl) { images.push({ item, error: 'the embed carried no thumbnail' }); continue; }
+        try {
+          const { buffer, box, sourceBytes } = await fetchAndTrim(item.imageUrl);
+          const id = await storeImage(buffer, {
+            runId: res.runId, pid: item.pid, kind: 'product',
+            width: box?.cropWidth ?? null, height: box?.cropHeight ?? null,
+          });
+          images.push({ item, id, url: imageUrl(id), box, sourceBytes });
+        } catch (err) {
+          images.push({ item, error: err.message });
+        }
+      }
+
+      const imageLine = (entry) => {
+        if (entry.error) return `  ${entry.item.pid} image failed: ${entry.error}`;
+        const dims = entry.box ? `${entry.box.cropWidth}x${entry.box.cropHeight}` : 'untrimmed';
+        return `  ${entry.item.pid} ${dims} ${entry.url ?? '(no public URL configured yet)'}`;
+      };
+
       const lines = usable.map((i) => `  ${i.productName} (${i.pid}) ${i.priceDisplay}`).join('\n');
       const skippedNote = skipped.length
         ? `\nSkipped ${skipped.length}: ` + skipped.map((i) => `${i.rawTitle} [${i.classification}]`).join('; ')
@@ -76,8 +102,9 @@ const batcher = new Batcher({
         + `Window: ${usable[0].startsAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} to `
         + `${usable[0].endsAt.setZone('America/New_York').toFormat('h:mma')} ET\n`
         + `Items:\n${lines}${skippedNote}`
+        + `\nImages:\n${images.map(imageLine).join('\n')}`
         + (suspect ? `\nWarnings:\n${suspect}` : '')
-        + `\n\nStage one stops here. No posts have been created.`,
+        + `\n\nNo posts have been created. Canva and Buffer come in later stages.`,
       );
     } catch (err) {
       await alert(`Draw ${drawDate} failed while saving the run: ${err.message}`);
@@ -135,6 +162,11 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 try {
   await migrate();
   console.log('database schema is up to date');
+  startServer();
+  const base = publicBaseUrl();
+  console.log(base
+    ? `images will be served from ${base}/images/`
+    : 'no public domain yet, so image URLs cannot be built. Generate one in Railway under Settings, Networking.');
 } catch (err) {
   console.error('could not apply the database schema:', err.message);
   process.exit(1);

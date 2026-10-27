@@ -123,3 +123,16 @@ export async function deleteSecret(key) {
 export async function setRunDesign(runId, designId) {
   await pool.query('UPDATE draw_runs SET canva_design_id = $2 WHERE id = $1', [runId, designId]);
 }
+
+export async function recordBufferPost({ runId, slot, channelId, bufferPostId }) {
+  await pool.query(
+    `INSERT INTO buffer_posts (run_id, slot, channel_id, buffer_post_id)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (run_id, slot, channel_id) DO UPDATE SET buffer_post_id = EXCLUDED.buffer_post_id`,
+    [runId, slot, channelId, bufferPostId],
+  );
+}
+
+export async function markComplete(runId) {
+  await pool.query("UPDATE draw_runs SET status = 'complete', completed_at = now() WHERE id = $1", [runId]);
+}

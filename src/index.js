@@ -7,6 +7,9 @@ import { fetchAndTrim } from './image.js';
 import { startServer, imageUrl, publicBaseUrl, setupKey } from './server.js';
 import { buildDrawImage, MAX_ITEMS, headingFor } from './draw-image.js';
 import { sampleItems } from './selftest.js';
+import { publishRun, summarise } from './publish.js';
+import { nameItems, setsOf } from './naming.js';
+import { buildPosts, winsPost, discordPost } from './copy.js';
 import { isConnected as canvaConnected } from './canva.js';
 
 const {
@@ -119,6 +122,30 @@ const batcher = new Batcher({
         }
       }
 
+      // Buffer. Only ever attempted once the image exists, because every post
+      // in the set carries it and a post without it is not worth creating.
+      let publish = null;
+      let publishError = null;
+
+      if (!drawImage) {
+        publishError = 'skipped, because there is no draw image to attach';
+      } else if (!process.env.BUFFER_TOKEN) {
+        publishError = 'skipped, because BUFFER_TOKEN is not set';
+      } else {
+        try {
+          publish = await publishRun({
+            runId: res.runId,
+            items: usable,
+            startsAt: usable[0].startsAt,
+            endsAt: usable[0].endsAt,
+            imageUrl: drawImage.url,
+            asDraft: process.env.BUFFER_LIVE !== 'true',
+          });
+        } catch (err) {
+          publishError = err.message;
+        }
+      }
+
       const lines = usable.map((i) => `  ${i.productName} (${i.pid}) ${i.priceDisplay}`).join('\n');
       const skippedNote = skipped.length
         ? `\nSkipped ${skipped.length}: ` + skipped.map((i) => `${i.rawTitle} [${i.classification}]`).join('; ')
@@ -136,8 +163,15 @@ const batcher = new Batcher({
               + `(${Math.round(drawImage.bytes / 1024)}KB, design ${drawImage.designId})`
             : `not built. ${drawImageError}`}`
         + (suspect ? `\nWarnings:\n${suspect}` : '')
-        + `\n\nNo posts have been created. Buffer publishing comes in the next stage.`,
+        + `\nPosts: ${publish
+            ? `${publish.expected - publish.failed}/${publish.expected} created as `
+              + `${process.env.BUFFER_LIVE === 'true' ? 'scheduled posts' : 'drafts'}`
+              + `${publish.naming.note ? ` (naming: ${publish.naming.note})` : ''}\n${summarise(publish)}`
+            : publishError}`,
       );
+      if (publish?.discord) {
+        await alert(`Discord post for ${drawDate}, ready to copy:\n\n${publish.discord}`);
+      }
     } catch (err) {
       await alert(`Draw ${drawDate} failed while saving the run: ${err.message}`);
     }
@@ -196,14 +230,68 @@ async function drawTest(message, raw) {
   }
 }
 
+/**
+ * `!drawpreview [1-5]` in the alert channel.
+ *
+ * Composes the full post set from stand in products and prints it, without
+ * touching Buffer or Canva. It is for reading the copy before trusting it to a
+ * live draw, and for checking a wording change before it ships.
+ */
+async function drawPreview(message, raw) {
+  const n = Math.min(Math.max(parseInt(raw, 10) || 2, 1), MAX_ITEMS);
+  const startsAt = DateTime.now().setZone('America/New_York')
+    .plus({ days: 3 }).set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
+
+  const stand = [
+    { pid: 'p1', rawTitle: 'Pokemon TCG: Scarlet & Violet-Prismatic Evolutions Booster Bundle 2 Pack', productName: 'Prismatic Evolutions Booster Bundle 2 Pack', priceDisplay: '$79.94' },
+    { pid: 'p2', rawTitle: 'Pokemon Trading Card Game: 30th Anniversary Elite Trainer Box', productName: '30th Anniversary Elite Trainer Box', priceDisplay: '$59.99' },
+    { pid: 'p3', rawTitle: 'Pokemon TCG Mega Evolution Ascended Heroes Booster Bundle', productName: 'Ascended Heroes Booster Bundle', priceDisplay: '$26.94' },
+    { pid: 'p4', rawTitle: 'Pokemon TCG: Destined Rivals Elite Trainer Box', productName: 'Destined Rivals Elite Trainer Box', priceDisplay: '$49.99' },
+    { pid: 'p5', rawTitle: 'Pokemon TCG: Perfect Order Booster Bundle', productName: 'Perfect Order Booster Bundle', priceDisplay: '$31.88' },
+  ].slice(0, n);
+
+  try {
+    const naming = await nameItems(stand);
+    const sets = setsOf(naming.items);
+    const posts = buildPosts({
+      items: naming.items, sets, startsAt, endsAt: startsAt.plus({ hours: 1 }),
+    });
+
+    await message.reply(
+      `Dry run, ${n} item(s). Nothing was sent to Buffer or Canva.\n`
+      + `Naming came from the ${naming.source}${naming.note ? ` (${naming.note})` : ''}. `
+      + `Sets: ${sets.join(', ') || 'none recognised'}.`,
+    );
+
+    for (const post of posts) {
+      const when = post.dueAt
+        ? post.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')
+        : 'draft, no schedule';
+      await message.channel.send(`**${post.slot}** (${when})\n\n${post.text}`.slice(0, 1990));
+    }
+    await message.channel.send(`**wins_draft** (draft, no schedule)\n\n${winsPost()}`.slice(0, 1990));
+    await message.channel.send(
+      `**Discord post**, ready to copy:\n\n${discordPost({ items: naming.items, sets, startsAt })}`.slice(0, 1990),
+    );
+  } catch (err) {
+    await message.reply(`Preview failed: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   // The command branch only. The bot check must NOT cover the monitor channel:
   // the Walmart monitor posts as a bot, so filtering bots there would make the
   // service deaf to every draw.
   if (ALERT_CHANNEL_ID && message.channelId === ALERT_CHANNEL_ID) {
     if (message.author?.bot) return;
-    const cmd = message.content?.trim().match(/^!drawtest(?:\s+(\d+))?$/i);
-    if (cmd) await drawTest(message, cmd[1]);
+    const content = message.content?.trim() ?? '';
+
+    const test = content.match(/^!drawtest(?:\s+(\d+))?$/i);
+    if (test) { await drawTest(message, test[1]); return; }
+
+    const preview = content.match(/^!drawpreview(?:\s+(\d+))?$/i);
+    if (preview) { await drawPreview(message, preview[1]); return; }
+
     return;
   }
 

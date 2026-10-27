@@ -215,3 +215,44 @@ about.
 
 Files for this: `src/selftest.js` (new), `src/index.js` and `src/draw-image.js`
 (changed).
+
+---
+
+## Stage four: the Buffer posts
+
+### New Railway variables
+
+| Name | Needed? | What it is |
+|---|---|---|
+| `BUFFER_TOKEN` | yes | Your Buffer API key from publish.buffer.com/settings/api |
+| `ANTHROPIC_API_KEY` | optional | Lets Claude name the sets and tidy product titles. Without it the bot falls back to a built in list of known sets |
+| `BUFFER_LIVE` | no | Leave unset. Posts are created as drafts. Set it to `true` only when you want them scheduled for real |
+
+### What it does
+
+Once the draw image is built, the bot composes the full post set and creates
+each one on PokemonFindr and CollectFinder with the image attached:
+
+| Slot | When | Carries |
+|---|---|---|
+| announcement | no schedule | link, items, bookmark line |
+| morning | 9AM ET on draw day | link, items, tips, bookmark line |
+| ten_minutes | 10 minutes before | link, items, tips, bookmark line |
+| going_live | 1 minute before | link, items, tips |
+| thirty_left | 30 minutes after | link, items |
+| over | at the draw end | no link, ends at #Pokemon |
+| wins_draft | no schedule, PokemonFindr only, no image | the wins wording |
+
+The Discord post is printed into the alert channel for you to copy.
+
+Every post is created as a **draft** carrying its intended send time, so you can
+read the whole set in Buffer and approve it. Nothing goes out on its own.
+
+### Trying it before a live draw
+
+`!drawpreview` in the alert channel composes the whole set from stand in
+products and prints it, touching neither Buffer nor Canva. Add a number for
+more items: `!drawpreview 3`. Read the copy, and tell me about anything that
+reads wrong.
+
+`!drawtest` still builds a real image and remains unaffected by this stage.

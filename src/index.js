@@ -5,7 +5,7 @@ import { Batcher } from './batcher.js';
 import { saveRun, pool, migrate, storeImage } from './db.js';
 import { fetchAndTrim } from './image.js';
 import { startServer, imageUrl, publicBaseUrl, setupKey } from './server.js';
-import { buildDrawImage, MAX_ITEMS } from './draw-image.js';
+import { buildDrawImage, MAX_ITEMS, headingFor } from './draw-image.js';
 import { sampleItems } from './selftest.js';
 import { isConnected as canvaConnected } from './canva.js';
 
@@ -159,9 +159,19 @@ client.on(Events.Warn, (msg) => console.warn('discord warning:', msg));
  */
 async function drawTest(message, raw) {
   const n = Math.min(Math.max(parseInt(raw, 10) || 3, 1), MAX_ITEMS);
-  const startsAt = DateTime.now().setZone('America/New_York').set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
 
-  await message.reply(`Building a ${n} item test image. This usually takes under a minute.`);
+  // Deliberately NOT today at 5PM. That is word for word what sits in the
+  // template as placeholder text, so a test using it could not tell a live
+  // heading apart from a frozen one. Three days out at 12:30 also exercises
+  // the ordinal and the non zero minutes.
+  const startsAt = DateTime.now().setZone('America/New_York')
+    .plus({ days: 3 })
+    .set({ hour: 12, minute: 30, second: 0, millisecond: 0 });
+
+  await message.reply(
+    `Building a ${n} item test image. This usually takes under a minute.\n`
+    + `The heading should read: ${headingFor(startsAt).replace('\n', ' / ')}`,
+  );
   const began = Date.now();
 
   try {
@@ -177,8 +187,9 @@ async function drawTest(message, raw) {
       + `${built.url ?? '(stored, but no public domain configured)'}\n`
       + `${n} slot(s), source shapes ${items.map((i) => i.shape).join(', ')}, `
       + `${Math.round(built.bytes / 1024)}KB, design ${built.designId}\n`
-      + `Every block should sit square in its slot with no part cut off, and the prices should read `
-      + `${items.map((i) => i.priceDisplay).join(', ')}.`,
+      + `Every block should sit square in its slot with no part cut off, the prices should read `
+      + `${items.map((i) => i.priceDisplay).join(', ')}, and the heading should read `
+      + `"${headingFor(startsAt).replace('\n', ' / ')}" rather than the template's placeholder date.`,
     );
   } catch (err) {
     await message.reply(`Test image failed after ${((Date.now() - began) / 1000).toFixed(1)}s: ${err.message}`);

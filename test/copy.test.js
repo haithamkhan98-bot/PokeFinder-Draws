@@ -142,3 +142,81 @@ test('the Discord post carries the countdown and tags the role with a leading sp
 test('the announcement is composed first', () => {
   assert.equal(posts[0].slot, 'announcement');
 });
+
+// Walmart sometimes puts One Piece or sports cards through the same draw.
+// They belong in the posts, but always after Pokemon and under a subheading.
+const poke = (n, p) => ({ postName: n, priceDisplay: p, classification: 'pokemon' });
+const op = (n, p) => ({ postName: n, priceDisplay: p, classification: 'onepiece' });
+const sport = (n, p) => ({ postName: n, priceDisplay: p, classification: 'sports' });
+const mtg = (n, p) => ({ postName: n, priceDisplay: p, classification: 'othertcg' });
+
+const headline = (its, st) => buildPosts({
+  items: its, sets: st, startsAt, endsAt,
+}).find((p) => p.slot === 'announcement').text.split('\n')[0];
+
+const body = (its, st) => buildPosts({
+  items: its, sets: st, startsAt, endsAt,
+}).find((p) => p.slot === 'announcement').text;
+
+test('One Piece only gets its own named subheading', () => {
+  const text = body([poke('Prismatic Evolutions Booster Bundle 2-Pack', '$79.94'), op('One Piece OP-11 Booster Box', '$95.88')], ['Prismatic Evolutions']);
+  assert.ok(text.includes(
+    '• Prismatic Evolutions Booster Bundle 2-Pack $79.94\n\nOne Piece TCG Draws\n• One Piece OP-11 Booster Box $95.88',
+  ));
+});
+
+test('sports only gets the sports subheading', () => {
+  const text = body([poke('30th Celebration Elite Trainer Box', '$59.99'), sport('2026 Topps Chrome Baseball Hobby Box', '$299.99')], ['30th Celebration']);
+  assert.ok(text.includes('\n\nSports Card Draws\n• 2026 Topps Chrome Baseball Hobby Box $299.99'));
+});
+
+test('a mixture falls back to the generic subheading', () => {
+  const text = body([poke('30th Celebration Elite Trainer Box', '$59.99'), op('One Piece OP-11 Booster Box', '$95.88'), sport('Topps Chrome Hobby Box', '$299.99')], ['30th Celebration']);
+  assert.ok(text.includes('\n\nOther TCG Draws\n'));
+  assert.ok(!text.includes('One Piece TCG Draws'));
+});
+
+test('a single other card game also uses the generic subheading', () => {
+  const text = body([poke('30th Celebration Elite Trainer Box', '$59.99'), mtg('Magic Star Trek Collector Booster', '$44.99')], ['30th Celebration']);
+  assert.ok(text.includes('\n\nOther TCG Draws\n• Magic Star Trek Collector Booster $44.99'));
+});
+
+test('Pokemon sets lead the headline and the other categories follow', () => {
+  assert.equal(
+    headline([poke('Prismatic Evolutions Booster Bundle 2-Pack', '$79.94'), op('One Piece OP-11 Booster Box', '$95.88')], ['Prismatic Evolutions']),
+    '💫 New Prismatic Evolutions and One Piece TCG Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
+  );
+  assert.equal(
+    headline(
+      [poke('30th Anniversary ETB', '$59.99'), poke('Prismatic Evolutions Bundle', '$79.94'), op('One Piece OP-11 Booster Box', '$95.88'), sport('Topps Chrome Hobby Box', '$299.99')],
+      ['Prismatic Evolutions', '30th Anniversary'],
+    ),
+    '💫 New 30th Anniversary, Prismatic Evolutions, One Piece TCG and Sports Cards Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
+  );
+});
+
+// One Pokemon set plus one other category is still more than one thing.
+test('one set plus one other category makes the noun plural', () => {
+  assert.match(
+    headline([poke('Prismatic Evolutions Bundle', '$79.94'), op('One Piece OP-11 Booster Box', '$95.88')], ['Prismatic Evolutions']),
+    /Walmart Draws Beginning/,
+  );
+});
+
+test('a Pokemon only draw is unchanged by any of this', () => {
+  assert.equal(
+    headline([poke('Prismatic Evolutions Booster Bundle 2-Pack', '$79.94')], ['Prismatic Evolutions']),
+    '💫 New Prismatic Evolutions Walmart Draw Beginning 10/26 at 5PM EST / 2PM PST!',
+  );
+  assert.ok(!body([poke('Prismatic Evolutions Booster Bundle 2-Pack', '$79.94')], ['Prismatic Evolutions']).includes('Draws\n•'));
+});
+
+test('the Discord post carries the same split', () => {
+  const text = discordPost({
+    items: [poke('30th Celebration Elite Trainer Box', '$59.99'), op('One Piece OP-11 Booster Box', '$95.88')],
+    sets: ['30th Celebration'],
+    startsAt,
+  });
+  assert.ok(text.includes('30th Celebration and One Piece TCG Draws on 10/26'));
+  assert.ok(text.includes('\n\nOne Piece TCG Draws\n• One Piece OP-11 Booster Box $95.88'));
+});

@@ -17,6 +17,9 @@ export const TEMPLATES = {
   3: process.env.CANVA_TEMPLATE_3 || 'DAHZKM53Was',
   4: process.env.CANVA_TEMPLATE_4 || 'DAHZKA2dl10',
   5: process.env.CANVA_TEMPLATE_5 || 'DAHZKOrqov0',
+  6: process.env.CANVA_TEMPLATE_6 || 'DAHZNtjYbtw',
+  7: process.env.CANVA_TEMPLATE_7 || 'DAHZNq9g46c',
+  8: process.env.CANVA_TEMPLATE_8 || 'DAHZNpWUsPY',
 };
 
 /**
@@ -26,7 +29,7 @@ export const TEMPLATES = {
  * photo is padded to the frame's exact ratio first and nothing is lost. The
  * single item layout uses a tall frame; every multi item layout uses squares.
  */
-export const SLOT_ASPECT = { 1: 395.6 / 470, 2: 1, 3: 1, 4: 1, 5: 1 };
+export const SLOT_ASPECT = { 1: 395.6 / 470, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1 };
 
 export const MAX_ITEMS = Math.max(...Object.keys(TEMPLATES).map(Number));
 
@@ -65,7 +68,13 @@ export const templateFor = (count) => TEMPLATES[count] ?? null;
  * is then pulled down and stored here, so the URL handed to Buffer later
  * belongs to this service and cannot expire.
  */
-export async function buildDrawImage({ runId, drawDate, items, startsAt }) {
+export async function buildDrawImage({ runId, drawDate, items: allItems, startsAt }) {
+  // More items than the largest template means the picture cannot show them
+  // all. The posts still list every product; only the image drops the overflow,
+  // and it drops from the end, which is the lowest priority category.
+  const omitted = allItems.slice(MAX_ITEMS);
+  const items = omitted.length ? allItems.slice(0, MAX_ITEMS) : allItems;
+
   const count = items.length;
   const designId = templateFor(count);
   if (!designId) {
@@ -104,5 +113,8 @@ export async function buildDrawImage({ runId, drawDate, items, startsAt }) {
     if (url) await setRunImage(runId, url);
   }
 
-  return { designId: design.id, imageId: id, url, bytes: png.byteLength, editUrl: design.urls?.edit_url };
+  return {
+    designId: design.id, imageId: id, url, bytes: png.byteLength,
+    editUrl: design.urls?.edit_url, omitted,
+  };
 }

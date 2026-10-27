@@ -314,3 +314,36 @@ showing up as failures.
 | Announcement live on both channels | about 45s |
 
 Down from roughly six minutes.
+
+---
+
+## Non Pokemon items in draws
+
+Walmart sometimes puts One Piece, sports cards or another card game through the
+same draw. These now appear in the posts, always after Pokemon.
+
+**Headline.** Pokemon sets are named first, 30th Anniversary leading, then
+"One Piece TCG", "Sports Cards" or "Other TCG" as applicable.
+
+**Product list.** Pokemon items first with no heading, then a blank line, then
+a subheading and the rest. The subheading is named when the non Pokemon items
+are all of one kind and generic when they are mixed:
+
+| What is in the draw | Subheading |
+|---|---|
+| Only One Piece | One Piece TCG Draws |
+| Only sports cards | Sports Card Draws |
+| Anything mixed, or another game such as Magic or Lorcana | Other TCG Draws |
+
+**Dropped.** Repacks, mystery boxes, and non card merchandise such as
+Nendoroids, figures and plush are left out entirely, as before.
+
+**Not recognised.** A product matching none of the patterns is reported in the
+run summary as NOT RECOGNISED rather than silently dropped. If one of those is
+a card product that should have been posted, say so and the patterns get
+updated.
+
+**Image.** Templates now run from 1 to 8 items, so a longer draw still gets a
+picture. Past 8, every product still appears in the posts and the image shows
+the first 8, which are the highest priority because the run is ordered Pokemon
+first. The summary names anything left out of the picture.

@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
 import { DateTime } from 'luxon';
-import { parseEmbed, DRAW_AUTHOR } from './parse.js';
+import { parseEmbed, DRAW_AUTHOR, isPostable } from './parse.js';
 import { Batcher } from './batcher.js';
 import { saveRun, pool, migrate, storeImage } from './db.js';
 import { fetchAndTrim } from './image.js';
@@ -52,12 +52,20 @@ const batcher = new Batcher({
     );
   },
   onFire: async ({ drawDate, items, reason }) => {
-    const usable = items.filter((i) => i.classification === 'pokemon');
-    const skipped = items.filter((i) => i.classification !== 'pokemon');
+    // Pokemon leads every post, so the run is ordered by category here and
+    // everything downstream, the image slots included, follows that order.
+    const RANK = { pokemon: 0, onepiece: 1, sports: 2, othertcg: 3 };
+    const usable = items
+      .filter((i) => isPostable(i.classification))
+      .sort((a, b) => RANK[a.classification] - RANK[b.classification]);
+    const skipped = items.filter((i) => !isPostable(i.classification));
 
     try {
       if (!usable.length) {
-        await alert(`Draw ${drawDate}: ${items.length} item(s) detected, none of them Pokemon TCG. Nothing to post.`);
+        await alert(
+          `Draw ${drawDate}: ${items.length} item(s) detected, none of them card products. Nothing to post.\n`
+          + skipped.map((i) => `  ${i.rawTitle} [${i.classification}]`).join('\n'),
+        );
         return;
       }
 
@@ -107,8 +115,6 @@ const batcher = new Batcher({
 
       if (failedPhotos.length) {
         drawImageError = `${failedPhotos.length} of ${usable.length} product photo(s) could not be fetched`;
-      } else if (usable.length > MAX_ITEMS) {
-        drawImageError = `${usable.length} items, but templates only exist for 1 to ${MAX_ITEMS}`;
       } else {
         try {
           drawImage = await buildDrawImage({
@@ -154,8 +160,13 @@ const batcher = new Batcher({
       }
 
       const lines = usable.map((i) => `  ${i.productName} (${i.pid}) ${i.priceDisplay}`).join('\n');
+      const unknown = skipped.filter((i) => i.classification === 'unknown');
       const skippedNote = skipped.length
         ? `\nSkipped ${skipped.length}: ` + skipped.map((i) => `${i.rawTitle} [${i.classification}]`).join('; ')
+          + (unknown.length
+            ? `\n  ${unknown.length} of these were NOT RECOGNISED rather than deliberately dropped. `
+              + `If any is a card product it should be in the posts, so tell Claude and the patterns get updated.`
+            : '')
         : '';
       const suspect = usable.filter((i) => i.suspect).map((i) => `  ${i.pid}: ${i.suspect}`).join('\n');
 
@@ -168,6 +179,11 @@ const batcher = new Batcher({
         + `\nDraw image: ${drawImage
             ? `${drawImage.url ?? '(stored, but no public domain configured)'} `
               + `(${Math.round(drawImage.bytes / 1024)}KB, design ${drawImage.designId})`
+              + (drawImage.omitted?.length
+                ? `\n  ${drawImage.omitted.length} item(s) are in the posts but NOT in the image, `
+                  + `because the largest template holds ${MAX_ITEMS}: `
+                  + drawImage.omitted.map((i) => i.productName || i.rawTitle).join('; ')
+                : '')
             : `not built. ${drawImageError}`}`
         + (suspect ? `\nWarnings:\n${suspect}` : '')
         + `\nPosts: ${publish

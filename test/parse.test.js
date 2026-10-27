@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
-import { parseEmbed, parseWindow, classify, parsePrice, suggestName } from '../src/parse.js';
+import { parseEmbed, parseWindow, classify, parsePrice, suggestName, POSTABLE, isPostable } from '../src/parse.js';
 import { drawEmbed, restockEmbed } from './fixtures.js';
 
 const NOW = DateTime.fromISO('2026-10-23T13:35:00', { zone: 'America/New_York' });
@@ -49,11 +49,40 @@ test('a draw embed missing its Time field reports rather than guesses', () => {
   assert.match(parseEmbed(broken, { now: NOW }).error, /Time/);
 });
 
-test('repacks and non Pokemon items are separated from Pokemon TCG', () => {
+test('repacks and non card merchandise are dropped', () => {
   assert.equal(classify('Pokemon TCG: Mystery Power Box'), 'excluded');
   assert.equal(classify('Pokemon Repack Bundle'), 'excluded');
-  assert.equal(classify('Magic: The Gathering Final Fantasy Collector'), 'other');
+  assert.equal(classify('Nendoroid Pikachu Figure'), 'excluded');
+  assert.equal(classify('Pokemon Pikachu Plush'), 'excluded');
+});
+
+// Repacks are checked before anything else, so a Pokemon repack stays excluded
+// rather than being pulled back in by the Pokemon patterns.
+test('a Pokemon repack is excluded, not posted', () => {
+  assert.equal(classify('Pokemon TCG Mystery Pack'), 'excluded');
+});
+
+test('card products are sorted into their posting categories', () => {
   assert.equal(classify('Pokemon TCG: Prismatic Evolutions Booster Bundle'), 'pokemon');
+  assert.equal(classify('One Piece TCG OP-11 Booster Box'), 'onepiece');
+  assert.equal(classify('One Piece Card Game Romance Dawn'), 'onepiece');
+  assert.equal(classify('2026 Topps Chrome Baseball Hobby Box'), 'sports');
+  assert.equal(classify('Panini Prizm NBA Blaster'), 'sports');
+  assert.equal(classify('Magic: The Gathering Final Fantasy Collector'), 'othertcg');
+  assert.equal(classify('Lorcana Azurite Sea Booster Box'), 'othertcg');
+});
+
+// A game we have no pattern for must be reported, never silently grouped with
+// something else or dropped as if it were merchandise.
+test('an unrecognised product is flagged as unknown', () => {
+  assert.equal(classify('Brand New Card Game Starter Deck'), 'unknown');
+});
+
+test('postable categories are Pokemon first, then the rest', () => {
+  assert.deepEqual(POSTABLE, ['pokemon', 'onepiece', 'sports', 'othertcg']);
+  assert.ok(isPostable('onepiece'));
+  assert.ok(!isPostable('unknown'));
+  assert.ok(!isPostable('excluded'));
 });
 
 test('prefix noise is stripped from the stored product name', () => {

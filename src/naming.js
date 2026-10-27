@@ -53,7 +53,8 @@ Rules:
 - "postName" is how the product is written in a post: the set name followed by the product, for example "Prismatic Evolutions Booster Bundle 2-Pack" or "30th Celebration Elite Trainer Box".
 - Keep the retailer's own pack counts and variant names, hyphenated the way a person would write them ("2-Pack", "3-Pack Blister").
 - Strip "Pokemon Trading Card Game", "Pokemon TCG", "Scarlet & Violet", master set prefixes and years.
-- Do not invent products, do not merge items, and return exactly one entry per pid.`;
+- Do not invent products, do not merge items, and return exactly one entry per pid.
+- Some items are not Pokemon: One Piece, sports cards, or another card game. For those, set "set" to null and write "postName" as a person would write the product, for example "One Piece OP-11 Booster Box" or "2026 Topps Chrome Baseball Hobby Box".`;
 
 /**
  * Ask Claude for the set names and post names.
@@ -119,7 +120,16 @@ export async function nameItems(items, { timeoutMs = 30_000 } = {}) {
   }
 }
 
-/** The distinct set names in run order, ready for setsLabel. */
-export const setsOf = (items) => [...new Set(items.map((i) => i.set).filter(Boolean))];
+/**
+ * The distinct Pokemon set names, in run order.
+ *
+ * Only Pokemon items carry a set: One Piece, sports and the other card games
+ * are named by category in the headline instead, so including them here would
+ * put them in the Pokemon part of the label.
+ */
+export const setsOf = (items) => [...new Set(
+  items.filter((i) => !i.classification || i.classification === 'pokemon')
+    .map((i) => i.set).filter(Boolean),
+)];
 
 export { setsLabel };

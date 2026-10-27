@@ -20,7 +20,30 @@ const TIME_RE = /^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{1,2}):(\d{2})\s*([ap]m)\s*[
 const EXCLUDE = [
   /\brepack\b/i, /\bmystery\s*(power\s*)?box\b/i, /\bmystery\s*pack\b/i,
 ];
+
+// Walmart puts plenty of non card merchandise through the same draws. None of
+// it belongs in a PokeFinder post, so it is dropped rather than categorised.
+const NOT_CARDS = [
+  /\bnendoroid\b/i, /\bfigur(e|ine)s?\b/i, /\bfunko\b/i, /\bpop!\b/i,
+  /\bplush(ie)?\b/i, /\bstatue\b/i, /\bplaymat\b/i, /\bbackpack\b/i,
+  /\bkeychain\b/i, /\blego\b/i, /\bpuzzle\b/i, /\bapparel\b/i,
+  /\bt-?shirt\b/i, /\bhoodie\b/i, /\bsneakers?\b/i, /\bconsole\b/i,
+];
+
 const POKEMON = [/\bpok[eé]mon\b/i, /\bpokemon\b/i, /\bptcg\b/i];
+const ONE_PIECE = [/\bone\s*piece\b/i, /\boptcg\b/i];
+const SPORTS = [
+  /\btopps\b/i, /\bbowman\b/i, /\bpanini\b/i, /\bprizm\b/i, /\bdonruss\b/i,
+  /\bupper\s*deck\b/i, /\bsports?\s*cards?\b/i, /\bmosaic\b/i, /\boptic\b/i,
+  /\b(nfl|nba|mlb|nhl|wnba)\b/i, /\bfootball\b/i, /\bbasketball\b/i,
+  /\bbaseball\b/i, /\bhockey\b/i, /\bsoccer\b/i,
+];
+const OTHER_TCG = [
+  /\bmagic:?\s*the\s*gathering\b/i, /\bmtg\b/i, /\blorcana\b/i,
+  /\byu-?gi-?oh\b/i, /\bdigimon\b/i, /\bweiss\s*schwarz\b/i,
+  /\bdragon\s*ball\b/i, /\bflesh\s*and\s*blood\b/i, /\bstar\s*wars\s*unlimited\b/i,
+  /\bgundam\b/i, /\briftbound\b/i,
+];
 
 function to24(hour, meridiem) {
   const h = Number(hour) % 12;
@@ -74,12 +97,30 @@ export function parseWindow(raw, now = DateTime.now()) {
   return { start, end, zone, suspect };
 }
 
+/**
+ * Which block of the post an item belongs to.
+ *
+ * Pokemon leads every post. One Piece, sports cards and the other card games
+ * follow under a subheading. Repacks and non card merchandise are dropped.
+ * Anything unrecognised comes back as 'unknown' rather than being quietly
+ * grouped, so a game we have no pattern for is reported instead of lost.
+ */
 export function classify(title) {
   const t = title ?? '';
+  // Merchandise is tested before the games, or a Pokemon branded plush or
+  // figure would be taken for a postable Pokemon card product.
   if (EXCLUDE.some((re) => re.test(t))) return 'excluded';
+  if (NOT_CARDS.some((re) => re.test(t))) return 'excluded';
   if (POKEMON.some((re) => re.test(t))) return 'pokemon';
-  return 'other';
+  if (ONE_PIECE.some((re) => re.test(t))) return 'onepiece';
+  if (SPORTS.some((re) => re.test(t))) return 'sports';
+  if (OTHER_TCG.some((re) => re.test(t))) return 'othertcg';
+  return 'unknown';
 }
+
+/** The categories that make it into a post, in the order they appear. */
+export const POSTABLE = ['pokemon', 'onepiece', 'sports', 'othertcg'];
+export const isPostable = (c) => POSTABLE.includes(c);
 
 /**
  * Light cleanup only. Set resolution and the final tweet wording stay with the

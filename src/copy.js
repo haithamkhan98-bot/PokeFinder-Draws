@@ -44,18 +44,77 @@ export const shortDate = (startsAt) => startsAt.setZone('America/New_York').toFo
  * A draw covering more than one set names them all, joined the way a person
  * would write them rather than with commas throughout.
  */
-export function setsLabel(sets) {
-  const ordered = [...sets].sort((a, b) => {
+const joinEnglish = (list) => {
+  if (list.length <= 1) return list[0] ?? '';
+  if (list.length === 2) return `${list[0]} and ${list[1]}`;
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+};
+
+export function orderedSets(sets) {
+  return [...sets].sort((a, b) => {
     const rank = (s) => (/30th/i.test(s) ? 0 : 1);
     return rank(a) - rank(b) || sets.indexOf(a) - sets.indexOf(b);
   });
-  if (ordered.length === 1) return ordered[0];
-  if (ordered.length === 2) return `${ordered[0]} and ${ordered[1]}`;
-  return `${ordered.slice(0, -1).join(', ')} and ${ordered[ordered.length - 1]}`;
 }
+
+export const pokemonSetsLabel = (sets) => joinEnglish(orderedSets(sets));
 
 /** "• Prismatic Evolutions Booster Bundle 2-Pack $79.94" per item. */
 export const itemLines = (items) => items.map((i) => `• ${i.postName} ${i.priceDisplay}`).join('\n');
+
+const isPokemon = (i) => i.classification === 'pokemon' || !i.classification;
+
+/**
+ * The subheading above the non Pokemon items.
+ *
+ * Named when the draw's non Pokemon items are all of one kind, and the generic
+ * heading when they are mixed.
+ */
+export function otherHeading(others) {
+  const kinds = new Set(others.map((i) => i.classification));
+  if (kinds.size === 1) {
+    if (kinds.has('onepiece')) return 'One Piece TCG Draws';
+    if (kinds.has('sports')) return 'Sports Card Draws';
+  }
+  return 'Other TCG Draws';
+}
+
+/**
+ * The product list.
+ *
+ * Pokemon first and unlabelled, then a blank line, then the non Pokemon items
+ * under their subheading. Pokemon is always the lead, so it never gets a
+ * heading of its own.
+ */
+export function itemBlock(items) {
+  const poke = items.filter(isPokemon);
+  const others = items.filter((i) => !isPokemon(i));
+  if (!others.length) return itemLines(poke);
+  const tail = `${otherHeading(others)}\n${itemLines(others)}`;
+  return poke.length ? `${itemLines(poke)}\n\n${tail}` : tail;
+}
+
+/** The non Pokemon names for the headline, in their fixed order. */
+export function otherLabels(items) {
+  const has = (c) => items.some((i) => i.classification === c);
+  const out = [];
+  if (has('onepiece')) out.push('One Piece TCG');
+  if (has('sports')) out.push('Sports Cards');
+  if (has('othertcg')) out.push('Other TCG');
+  return out;
+}
+
+/**
+ * The headline label: Pokemon sets first, then the other categories.
+ *
+ * Pokemon leads, 30th Anniversary leads the Pokemon sets, and anything non
+ * Pokemon is named only after every Pokemon set has been.
+ */
+export function headlineLabel(sets, items) {
+  // One flat list joined once. Joining the Pokemon sets first and then joining
+  // that result with the other categories produces a nested "and".
+  return joinEnglish([...orderedSets(sets), ...otherLabels(items)]);
+}
 
 const join = (...blocks) => blocks.filter(Boolean).join('\n\n');
 
@@ -66,10 +125,12 @@ const join = (...blocks) => blocks.filter(Boolean).join('\n\n');
  * when it covers several, matching how HK writes them.
  */
 export function buildPosts({ items, sets, startsAt, endsAt }) {
-  const label = setsLabel(sets);
-  const plural = sets.length > 1;
-  const noun = plural ? 'Draws' : 'Draw';
-  const lines = itemLines(items);
+  const label = headlineLabel(sets, items);
+  // Plural once the draw spans more than one named thing, whether that is two
+  // Pokemon sets or one set plus a non Pokemon category.
+  const named = (sets.length || 0) + otherLabels(items).length;
+  const noun = named > 1 ? 'Draws' : 'Draw';
+  const lines = itemBlock(items);
   const when = timeLabel(startsAt);
   const link = `Enter Draw Here: ${DRAW_LINK_TWEETS}`;
 
@@ -150,8 +211,8 @@ export const altTextFor = ({ items, startsAt }) => {
 
 /** The Discord post for HK's server. Returned as text for him to paste. */
 export function discordPost({ items, sets, startsAt }) {
-  const label = setsLabel(sets);
-  const noun = sets.length > 1 ? 'Draws' : 'Draw';
+  const label = headlineLabel(sets, items);
+  const noun = (sets.length || 0) + otherLabels(items).length > 1 ? 'Draws' : 'Draw';
   const epoch = Math.floor(startsAt.toSeconds());
   return [
     `# New Walmart Draws Beginning ${shortDate(startsAt)} at ${timeLabel(startsAt)}`,
@@ -160,7 +221,10 @@ export function discordPost({ items, sets, startsAt }) {
     + `<t:${epoch}:F> (<t:${epoch}:R>)** @PokeFinder+`,
     '',
     '**Items for Upcoming Draw:**',
-    itemLines(items),
+    itemBlock(items),
     `# Draw Link: [Walmart Collectibles Draw](${DRAW_LINK_DISCORD})`,
   ].join('\n');
 }
+
+/** @deprecated use headlineLabel. Kept because the tests pin set ordering. */
+export { pokemonSetsLabel as setsLabel };

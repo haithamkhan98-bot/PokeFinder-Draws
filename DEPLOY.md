@@ -143,3 +143,52 @@ When I send you new files, go to the repo on GitHub, click **Add file** then
 **Upload files**, drag the new ones in, and commit. Railway notices and
 redeploys on its own. You never need to touch Railway again after the first
 setup.
+
+---
+
+## Stage three b: the draw image
+
+This stage makes the bot build the Canva image for a draw and host it here.
+There are **no new Railway variables** — the Canva connection you already
+approved is all it needs.
+
+### What changed
+
+| File | New? | What it does |
+|---|---|---|
+| `src/canva-api.js` | new | Talks to Canva: uploads photos, runs the autofill, exports the PNG |
+| `src/draw-image.js` | new | Picks the right template, writes the header, hosts the result |
+| `src/index.js` | changed | Calls the image builder once a run fires |
+| `src/db.js` | changed | Records which Canva design a run produced |
+| `test/draw-image.test.js` | new | Tests for the header wording and template choice |
+
+### Uploading
+
+Same as before:
+
+1. Open your GitHub repository in a browser.
+2. Click **Add file**, then **Upload files**.
+3. Drag in the five files above, keeping them in the same folders
+   (`src/...` files go in `src`, the test goes in `test`).
+   GitHub will ask about overwriting `index.js` and `db.js` — that is expected.
+4. Scroll down, leave "Commit directly to the main branch" selected, and click
+   **Commit changes**.
+
+Railway sees the commit and redeploys on its own. Nothing to click there.
+
+### What you should see
+
+The next time the monitor posts a draw, the run summary in the alert channel
+gains a line like:
+
+```
+Draw image: https://your-app.up.railway.app/images/<id>.png (284KB, design DAHZK...)
+```
+
+Open that link. It is the finished draw image, served from your own bot rather
+than from Canva, so it will still work when Buffer fetches it days later.
+
+If it says `Draw image: not built.` the reason follows on the same line. The
+two likely ones are a product photo that would not download, and a draw with
+more items than there are templates (there are five, for one to five items).
+Everything else about the run still succeeded; only the image is missing.

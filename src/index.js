@@ -5,6 +5,7 @@ import { Batcher } from './batcher.js';
 import { saveRun, pool, migrate, storeImage } from './db.js';
 import { fetchAndTrim } from './image.js';
 import { startServer, imageUrl, publicBaseUrl, setupKey } from './server.js';
+import { buildDrawImage, MAX_ITEMS } from './draw-image.js';
 import { isConnected as canvaConnected } from './canva.js';
 
 const {
@@ -80,7 +81,7 @@ const batcher = new Batcher({
             runId: res.runId, pid: item.pid, kind: 'product',
             width: box?.cropWidth ?? null, height: box?.cropHeight ?? null,
           });
-          images.push({ item, id, url: imageUrl(id), box, sourceBytes });
+          images.push({ item, id, url: imageUrl(id), box, sourceBytes, buffer });
         } catch (err) {
           images.push({ item, error: err.message });
         }
@@ -91,6 +92,31 @@ const batcher = new Batcher({
         const dims = entry.box ? `${entry.box.cropWidth}x${entry.box.cropHeight}` : 'untrimmed';
         return `  ${entry.item.pid} ${dims} ${entry.url ?? '(no public URL configured yet)'}`;
       };
+
+      // The draw image. Every product photo is in hand at this point, so this
+      // is the last step before Buffer: fill the layout that matches the item
+      // count, then host the render here. Nothing downstream ever sees a
+      // canva.com URL, because those expire long before a queued post sends.
+      let drawImage = null;
+      let drawImageError = null;
+      const failedPhotos = images.filter((e) => e.error);
+
+      if (failedPhotos.length) {
+        drawImageError = `${failedPhotos.length} of ${usable.length} product photo(s) could not be fetched`;
+      } else if (usable.length > MAX_ITEMS) {
+        drawImageError = `${usable.length} items, but templates only exist for 1 to ${MAX_ITEMS}`;
+      } else {
+        try {
+          drawImage = await buildDrawImage({
+            runId: res.runId,
+            drawDate,
+            startsAt: usable[0].startsAt,
+            items: images.map((e) => ({ ...e.item, buffer: e.buffer })),
+          });
+        } catch (err) {
+          drawImageError = err.message;
+        }
+      }
 
       const lines = usable.map((i) => `  ${i.productName} (${i.pid}) ${i.priceDisplay}`).join('\n');
       const skippedNote = skipped.length
@@ -104,8 +130,12 @@ const batcher = new Batcher({
         + `${usable[0].endsAt.setZone('America/New_York').toFormat('h:mma')} ET\n`
         + `Items:\n${lines}${skippedNote}`
         + `\nImages:\n${images.map(imageLine).join('\n')}`
+        + `\nDraw image: ${drawImage
+            ? `${drawImage.url ?? '(stored, but no public domain configured)'} `
+              + `(${Math.round(drawImage.bytes / 1024)}KB, design ${drawImage.designId})`
+            : `not built. ${drawImageError}`}`
         + (suspect ? `\nWarnings:\n${suspect}` : '')
-        + `\n\nNo posts have been created. Canva and Buffer come in later stages.`,
+        + `\n\nNo posts have been created. Buffer publishing comes in the next stage.`,
       );
     } catch (err) {
       await alert(`Draw ${drawDate} failed while saving the run: ${err.message}`);

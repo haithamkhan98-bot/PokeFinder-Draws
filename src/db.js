@@ -119,3 +119,7 @@ export async function setSecret(key, value) {
 export async function deleteSecret(key) {
   await pool.query('DELETE FROM secrets WHERE key = $1', [key]);
 }
+
+export async function setRunDesign(runId, designId) {
+  await pool.query('UPDATE draw_runs SET canva_design_id = $2 WHERE id = $1', [runId, designId]);
+}

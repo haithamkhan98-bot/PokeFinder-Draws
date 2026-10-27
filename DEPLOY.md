@@ -347,3 +347,51 @@ updated.
 picture. Past 8, every product still appears in the posts and the image shows
 the first 8, which are the highest priority because the run is ordered Pokemon
 first. The summary names anything left out of the picture.
+
+---
+
+## Member facing Discord posts
+
+The bot posts four times per draw to a members channel, each pinging the role.
+
+| Slot | When | Carries |
+|---|---|---|
+| announcement | immediately | items, countdown to the open |
+| morning | 9AM ET on draw day | items, tips, countdown to the open |
+| going_live | 1 minute before the draw opens | items, countdown to the close |
+| thirty_left | 30 minutes after it opens | items, countdown to the close |
+
+### Two new Railway variables
+
+```
+DISCORD_MEMBER_CHANNEL_ID=<the channel the posts go to>
+DISCORD_MEMBER_ROLE_ID=<the PokeFinder+ role ID>
+```
+
+Leave `DISCORD_MEMBER_CHANNEL_ID` unset and none of this runs; the Discord text
+is printed to the alert channel for you to paste, as before.
+
+### Finding the role ID
+
+This one matters. When you type `@PokeFinder+` in Discord, the app quietly
+turns it into a real mention behind the scenes. A bot sending that same text
+sends **plain text that notifies nobody**. It has to send the role's ID.
+
+1. Discord, User Settings, Advanced, turn on **Developer Mode**.
+2. Server Settings, Roles, right click **PokeFinder+**, **Copy Role ID**.
+3. Paste that number into Railway as `DISCORD_MEMBER_ROLE_ID`.
+
+The channel ID is the same idea: right click the channel, Copy Channel ID.
+
+The bot needs permission to post in that channel and to mention the role. If
+the role is not set to "Allow anyone to @mention this role", the bot's own role
+needs the **Mention @everyone, @here and All Roles** permission.
+
+### How the schedule survives
+
+Discord has no scheduled posts. The four posts are written to Postgres with
+their due times, and a ticker sends whatever has come due. A redeploy or a
+crash therefore cannot lose the going live post, which in memory timers would.
+
+A post that fails is retried on the next tick, up to five times, and each
+failure is reported to the alert channel with the reason.

@@ -136,3 +136,46 @@ export async function recordBufferPost({ runId, slot, channelId, bufferPostId })
 export async function markComplete(runId) {
   await pool.query("UPDATE draw_runs SET status = 'complete', completed_at = now() WHERE id = $1", [runId]);
 }
+
+export async function scheduleDiscordPost({ runId, slot, channelId, dueAt, body }) {
+  await pool.query(
+    `INSERT INTO discord_posts (run_id, slot, channel_id, due_at, body)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (run_id, slot) DO UPDATE
+       SET due_at = EXCLUDED.due_at, body = EXCLUDED.body, channel_id = EXCLUDED.channel_id`,
+    [runId, slot, channelId, dueAt, body],
+  );
+}
+
+/**
+ * Claim the Discord posts that are due.
+ *
+ * SKIP LOCKED means two instances of the bot, which Railway can briefly run
+ * during a deploy, cannot both grab the same row and post it twice.
+ */
+export async function claimDueDiscordPosts({ limit = 5 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, run_id, slot, channel_id, body, attempts
+       FROM discord_posts
+      WHERE posted_at IS NULL AND due_at <= now() AND attempts < 5
+      ORDER BY due_at
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED`,
+    [limit],
+  );
+  return rows;
+}
+
+export async function markDiscordPosted(id, messageId) {
+  await pool.query(
+    'UPDATE discord_posts SET posted_at = now(), message_id = $2, error = NULL WHERE id = $1',
+    [id, messageId],
+  );
+}
+
+export async function markDiscordFailed(id, message) {
+  await pool.query(
+    'UPDATE discord_posts SET attempts = attempts + 1, error = $2 WHERE id = $1',
+    [id, String(message).slice(0, 500)],
+  );
+}

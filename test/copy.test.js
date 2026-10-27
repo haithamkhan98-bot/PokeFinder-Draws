@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
-import { buildPosts, winsPost, discordPost, setsLabel, timeLabel, shortDate } from '../src/copy.js';
+import { buildPosts, winsPost, discordPost, buildDiscordPosts, setsLabel, timeLabel, shortDate } from '../src/copy.js';
 
 // The real Walmart draw of 26 October 2026, as published to PokemonFindr.
 // These expected strings are copied from the sent posts, so a change in the
@@ -219,4 +219,70 @@ test('the Discord post carries the same split', () => {
   });
   assert.ok(text.includes('30th Celebration and One Piece TCG Draws on 10/26'));
   assert.ok(text.includes('\n\nOne Piece TCG Draws\n• One Piece OP-11 Booster Box $95.88'));
+});
+
+// The member facing Discord posts.
+const ROLE = '<@&123456789>';
+const dposts = buildDiscordPosts({
+  items: [poke('Prismatic Evolutions Booster Bundle 2-Pack', '$79.94')],
+  sets: ['Prismatic Evolutions'],
+  startsAt,
+  endsAt,
+  role: ROLE,
+});
+const dBySlot = Object.fromEntries(dposts.map((p) => [p.slot, p]));
+
+test('there are four member posts on the expected anchors', () => {
+  assert.deepEqual(dposts.map((p) => p.slot), ['announcement', 'morning', 'going_live', 'thirty_left']);
+  const at = (slot) => dBySlot[slot].dueAt.setZone('America/New_York').toFormat('HH:mm');
+  assert.equal(dBySlot.announcement.dueAt, null);
+  assert.equal(at('morning'), '09:00');
+  assert.equal(at('going_live'), '16:59');
+  assert.equal(at('thirty_left'), '17:30');
+});
+
+// A bot sending the literal text "@PokeFinder+" notifies nobody. Only the
+// <@&id> form pings, so every post has to carry it.
+test('every member post carries the role mention in pingable form', () => {
+  for (const p of dposts) {
+    assert.ok(p.text.includes(ROLE), `${p.slot} is missing the role mention`);
+    assert.ok(!p.text.includes('@PokeFinder+'), `${p.slot} uses the plain text mention, which does not ping`);
+  }
+});
+
+test('member posts count down from the right end of the window', () => {
+  const start = Math.floor(startsAt.toSeconds());
+  const end = Math.floor(endsAt.toSeconds());
+  assert.ok(dBySlot.morning.text.includes(`<t:${start}:F>`));
+  assert.ok(dBySlot.going_live.text.includes(`<t:${end}:F>`));
+  assert.ok(dBySlot.thirty_left.text.includes(`<t:${end}:R>`));
+});
+
+test('member posts use the Discord link, never the tweet one', () => {
+  for (const p of dposts) {
+    assert.ok(p.text.includes('howl.link/swe1iqp31stef'), `${p.slot} is missing the Discord draw link`);
+    assert.ok(!p.text.includes('r5frrzi6qe8hx'), `${p.slot} is using the tweet link`);
+  }
+});
+
+test('only the morning post carries the tips block', () => {
+  assert.ok(dBySlot.morning.text.includes('**Tips for Success:**'));
+  assert.ok(!dBySlot.going_live.text.includes('Tips for Success'));
+  assert.ok(!dBySlot.thirty_left.text.includes('Tips for Success'));
+});
+
+test('member posts carry the other TCG split too', () => {
+  const mixed = buildDiscordPosts({
+    items: [poke('30th Celebration Elite Trainer Box', '$59.99'), op('One Piece OP-11 Booster Box', '$95.88')],
+    sets: ['30th Celebration'], startsAt, endsAt, role: ROLE,
+  });
+  assert.ok(mixed[0].text.includes('\n\nOne Piece TCG Draws\n• One Piece OP-11 Booster Box $95.88'));
+  assert.ok(mixed[0].text.includes('30th Celebration and One Piece TCG Draws'));
+});
+
+test('every member post fits inside a Discord message', () => {
+  const big = Array.from({ length: 8 }, (_, i) => poke(`A Fairly Long Product Name Number ${i + 1}`, '$199.99'));
+  for (const p of buildDiscordPosts({ items: big, sets: ['30th Anniversary', 'Prismatic Evolutions'], startsAt, endsAt, role: ROLE })) {
+    assert.ok(p.text.length < 1990, `${p.slot} is ${p.text.length} characters`);
+  }
 });

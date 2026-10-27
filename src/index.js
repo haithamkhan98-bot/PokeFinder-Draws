@@ -9,7 +9,9 @@ import { buildDrawImage, MAX_ITEMS, headingFor } from './draw-image.js';
 import { sampleItems } from './selftest.js';
 import { publishRun, summarise } from './publish.js';
 import { nameItems, setsOf } from './naming.js';
-import { buildPosts, winsPost, discordPost } from './copy.js';
+import { buildPosts, winsPost, discordPost, buildDiscordPosts } from './copy.js';
+import { startDiscordScheduler } from './discord-schedule.js';
+import { scheduleDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
 
 const {
@@ -18,7 +20,13 @@ const {
   ALERT_CHANNEL_ID,
   QUIET_PERIOD_MS = 300_000,
   CEILING_MS = 1_200_000,
+  DISCORD_MEMBER_CHANNEL_ID,
+  DISCORD_MEMBER_ROLE_ID,
 } = process.env;
+
+// Discord only pings when given the role ID. The literal text "@PokeFinder+"
+// renders as plain text and notifies nobody.
+const ROLE_MENTION = DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+';
 
 for (const [k, v] of Object.entries({ DISCORD_TOKEN, WALMART_CHANNEL_ID, DATABASE_URL: process.env.DATABASE_URL })) {
   if (!v) { console.error(`missing required env var ${k}`); process.exit(1); }
@@ -192,7 +200,39 @@ const batcher = new Batcher({
               + `${publish.naming.note ? ` (naming: ${publish.naming.note})` : ''}\n${summarise(publish)}`
             : publishError}`,
       );
-      if (publish?.discord) {
+      // The member facing Discord posts. The announcement is due immediately;
+      // the rest are written with their due times and sent by the scheduler.
+      if (DISCORD_MEMBER_CHANNEL_ID) {
+        try {
+          const named = publish?.naming?.items ?? usable;
+          const dposts = buildDiscordPosts({
+            items: named,
+            sets: publish?.sets ?? [],
+            startsAt: usable[0].startsAt,
+            endsAt: usable[0].endsAt,
+            role: ROLE_MENTION,
+          });
+
+          for (const d of dposts) {
+            if (d.dueAt && d.dueAt.toMillis() <= Date.now() && d.slot !== 'announcement') continue;
+            await scheduleDiscordPost({
+              runId: res.runId,
+              slot: d.slot,
+              channelId: DISCORD_MEMBER_CHANNEL_ID,
+              dueAt: (d.dueAt ?? DateTime.now()).toUTC().toISO(),
+              body: d.text,
+            });
+          }
+          await alert(
+            `Discord: ${dposts.length} member post(s) scheduled for ${drawDate}. `
+            + `The announcement goes out within 30 seconds; the rest at 9AM, one minute before the `
+            + `draw, and 30 minutes after it opens.`
+            + (DISCORD_MEMBER_ROLE_ID ? '' : '\n  DISCORD_MEMBER_ROLE_ID is not set, so the role will NOT be pinged.'),
+          );
+        } catch (err) {
+          await alert(`Draw ${drawDate}: the member Discord posts could not be scheduled: ${err.message}`);
+        }
+      } else if (publish?.discord) {
         await alert(`Discord post for ${drawDate}, ready to copy:\n\n${publish.discord}`);
       }
     } catch (err) {
@@ -346,6 +386,13 @@ client.on(Events.MessageCreate, async (message) => {
 
 client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
+  if (DISCORD_MEMBER_CHANNEL_ID) {
+    startDiscordScheduler(client, { onError: alert });
+    console.log(`member draw posts will go to channel ${DISCORD_MEMBER_CHANNEL_ID}`
+      + (DISCORD_MEMBER_ROLE_ID ? ` pinging role ${DISCORD_MEMBER_ROLE_ID}` : ' with NO role ping configured'));
+  } else {
+    console.log('DISCORD_MEMBER_CHANNEL_ID is not set, so no member draw posts will be sent');
+  }
   console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
 });
 

@@ -228,3 +228,85 @@ export function discordPost({ items, sets, startsAt }) {
 
 /** @deprecated use headlineLabel. Kept because the tests pin set ordering. */
 export { pokemonSetsLabel as setsLabel };
+
+const epoch = (dt) => Math.floor(dt.toSeconds());
+
+/**
+ * The member facing Discord posts for one draw day.
+ *
+ * Modelled on the announcement HK already uses: a plain title line, the sets
+ * and a live Discord timestamp in bold, the role mention, the items, then the
+ * link. The timestamps render in each member's own timezone and count
+ * themselves down, so nothing goes stale between writing and sending.
+ *
+ * `role` is the mention string. Discord only pings when it is given the role's
+ * ID as <@&id>; the literal text "@PokeFinder+" is just text.
+ */
+export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
+  const label = headlineLabel(sets, items);
+  const noun = (sets.length || 0) + otherLabels(items).length > 1 ? 'Draws' : 'Draw';
+  const lines = itemBlock(items);
+  const link = `# Draw Link: [Walmart Collectibles Draw](${DRAW_LINK_DISCORD})`;
+  const start = epoch(startsAt);
+  const end = epoch(endsAt);
+  const et = startsAt.setZone('America/New_York');
+  const when = timeLabel(startsAt);
+
+  return [
+    {
+      slot: 'announcement',
+      dueAt: null,
+      text: [
+        `# New Walmart Draws Beginning ${shortDate(startsAt)} at ${when}`,
+        '',
+        `**${label} ${noun} on ${shortDate(startsAt)} at ${when}: <t:${start}:F> (<t:${start}:R>)** ${role}`,
+        '',
+        '**Items for Upcoming Draw:**',
+        lines,
+        link,
+      ].join('\n'),
+    },
+    {
+      slot: 'morning',
+      dueAt: et.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }),
+      text: [
+        `# Reminder: Walmart Draws Go Live Today at ${when}`,
+        '',
+        `**${label} ${noun} opens <t:${start}:F> (<t:${start}:R>)** ${role}`,
+        '',
+        "**Items for Today's Draw:**",
+        lines,
+        '',
+        TIPS.replace('Tips for Success:', '**Tips for Success:**'),
+        link,
+      ].join('\n'),
+    },
+    {
+      // One minute before the draw opens, matching the tweet.
+      slot: 'going_live',
+      dueAt: et.minus({ minutes: 1 }),
+      text: [
+        '# Walmart Draws Going Live! Entries Accepted for 1 Hour',
+        '',
+        `**${label} ${noun} closes <t:${end}:F> (<t:${end}:R>)** ${role}`,
+        '',
+        '**Items in This Draw:**',
+        lines,
+        link,
+      ].join('\n'),
+    },
+    {
+      slot: 'thirty_left',
+      dueAt: et.plus({ minutes: 30 }),
+      text: [
+        '# 30 Minutes Left to Enter the Walmart Draws',
+        '',
+        `**${label} ${noun} closes <t:${end}:R>** ${role}`,
+        '',
+        '**Items in This Draw:**',
+        lines,
+        link,
+      ].join('\n'),
+    },
+  ];
+}

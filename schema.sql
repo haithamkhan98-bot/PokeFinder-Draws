@@ -73,3 +73,25 @@ CREATE TABLE IF NOT EXISTS draw_images (
 );
 
 CREATE INDEX IF NOT EXISTS draw_images_run_idx ON draw_images(run_id);
+
+-- Discord has no scheduled posts, so the bot holds the schedule itself. In
+-- memory timers would be lost on every Railway redeploy, which for a going
+-- live post means it silently never arrives. Rows here survive restarts and a
+-- ticker sends whatever is due.
+CREATE TABLE IF NOT EXISTS discord_posts (
+  id         BIGSERIAL PRIMARY KEY,
+  run_id     BIGINT      NOT NULL REFERENCES draw_runs(id) ON DELETE CASCADE,
+  slot       TEXT        NOT NULL,
+  channel_id TEXT        NOT NULL,
+  due_at     TIMESTAMPTZ NOT NULL,
+  body       TEXT        NOT NULL,
+  posted_at  TIMESTAMPTZ,
+  message_id TEXT,
+  error      TEXT,
+  attempts   INTEGER     NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, slot)
+);
+
+CREATE INDEX IF NOT EXISTS discord_posts_due_idx
+  ON discord_posts(due_at) WHERE posted_at IS NULL;

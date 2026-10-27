@@ -10,7 +10,9 @@ import { recordBufferPost, markComplete } from './db.js';
  * set can be reviewed in Buffer and approved rather than going out unseen.
  * Switching to live scheduling later is a matter of dropping saveToDraft.
  */
-export async function publishRun({ runId, items, startsAt, endsAt, imageUrl, asDraft = true }) {
+export async function publishRun({
+  runId, items, startsAt, endsAt, imageUrl, asDraft = true, liveSlots = new Set(),
+}) {
   const naming = await nameItems(items);
   const named = naming.items;
   const sets = setsOf(named);
@@ -21,10 +23,30 @@ export async function publishRun({ runId, items, startsAt, endsAt, imageUrl, asD
   const report = { naming, sets, posts: [], wins: null, discord: discordPost({ items: named, sets, startsAt }) };
 
   for (const post of posts) {
+    // The announcement is the only post that races anyone, so it can be set to
+    // publish on its own while the rest of the set stays in drafts.
+    const publishNow = liveSlots.has(post.slot);
+
+    // A send time already in the past is rejected by Buffer, which would show
+    // up as a failed post rather than an explained one. It happens whenever a
+    // draw is detected after one of its anchors has passed, for example a draw
+    // announced at noon on its own day, whose 9AM reminder can no longer run.
+    if (!publishNow && post.dueAt && post.dueAt.toMillis() <= Date.now()) {
+      report.posts.push({
+        slot: post.slot,
+        dueAt: post.dueAt,
+        publishNow: false,
+        skipped: 'its send time had already passed',
+        results: [],
+      });
+      continue;
+    }
+
     const results = await createOnDrawChannels({
       text: post.text,
       dueAt: post.dueAt ? post.dueAt.toUTC().toISO({ suppressMilliseconds: false }) : null,
-      saveToDraft: asDraft,
+      saveToDraft: asDraft && !publishNow,
+      publishNow,
       imageUrl,
       altText,
     });
@@ -35,7 +57,7 @@ export async function publishRun({ runId, items, startsAt, endsAt, imageUrl, asD
           .catch(() => {});
       }
     }
-    report.posts.push({ slot: post.slot, dueAt: post.dueAt, results });
+    report.posts.push({ slot: post.slot, dueAt: post.dueAt, publishNow, results });
   }
 
   // The wins post is PokemonFindr only and carries no image: HK sends it by
@@ -51,9 +73,10 @@ export async function publishRun({ runId, items, startsAt, endsAt, imageUrl, asD
   report.wins = wins[0];
 
   const failed = report.posts.flatMap((p) => p.results).filter((r) => !r.ok).length;
+  report.skipped = report.posts.filter((p) => p.skipped).length;
   if (runId && !failed) await markComplete(runId).catch(() => {});
   report.failed = failed;
-  report.expected = posts.length * DRAW_CHANNELS.length;
+  report.expected = report.posts.filter((p) => !p.skipped).length * DRAW_CHANNELS.length;
 
   return report;
 }
@@ -61,8 +84,11 @@ export async function publishRun({ runId, items, startsAt, endsAt, imageUrl, asD
 /** A short human summary of what went to Buffer. */
 export function summarise(report) {
   const lines = report.posts.map((p) => {
+    if (p.skipped) return `  ${p.slot.padEnd(13)} skipped, ${p.skipped}`;
     const ok = p.results.filter((r) => r.ok).length;
-    const when = p.dueAt ? p.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') : 'no schedule';
+    const when = p.publishNow
+      ? 'PUBLISHED NOW'
+      : p.dueAt ? p.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') : 'draft, no schedule';
     const errs = p.results.filter((r) => !r.ok).map((r) => r.error).join('; ');
     return `  ${p.slot.padEnd(13)} ${ok}/${p.results.length} ${when}${errs ? ` — ${errs}` : ''}`;
   });

@@ -256,3 +256,61 @@ more items: `!drawpreview 3`. Read the copy, and tell me about anything that
 reads wrong.
 
 `!drawtest` still builds a real image and remains unaffected by this stage.
+
+---
+
+## Getting the announcement out faster
+
+Two settings, and the second matters more.
+
+### 1. Shorten the quiet period
+
+The bot waits for a gap in new items before firing, so it does not build a
+five item draw from the first embed it sees. That wait was 5 minutes, which is
+nearly all of the delay you see.
+
+Railway variable, no code change:
+
+```
+QUIET_PERIOD_MS=30000
+```
+
+That is 30 seconds. If the monitor posts every item for a draw in one burst,
+30 seconds of silence is ample evidence the draw is complete.
+
+### 2. Publish the announcement automatically
+
+Even with a short quiet period, the announcement sits in Buffer as a draft
+until someone presses publish. That human step is now the longest part of the
+wait.
+
+```
+BUFFER_LIVE_ANNOUNCEMENT=true
+```
+
+With that set, the announcement publishes to both X channels the moment it is
+composed. The other six posts still land as drafts carrying their schedules,
+so nothing else goes out unreviewed.
+
+`BUFFER_LIVE=true` means the whole set goes live: the announcement publishes
+immediately and the other six are scheduled for real. The announcement
+publishes immediately under either flag.
+
+### A post whose time has passed
+
+Once posting is live, a draw detected after one of its anchors has already gone
+by (a draw announced at noon on its own day, whose 9AM reminder cannot run)
+would be rejected by Buffer. Those posts are now skipped deliberately and named
+in the run summary as "skipped, its send time had already passed", rather than
+showing up as failures.
+
+### Expected timing with both
+
+| Step | Time |
+|---|---|
+| Monitor posts the embeds | 0s |
+| Quiet period elapses | 30s |
+| Image built and hosted | about 41s |
+| Announcement live on both channels | about 45s |
+
+Down from roughly six minutes.

@@ -136,3 +136,9 @@ test('the Discord post carries the countdown and tags the role with a leading sp
   // The tweets and the Discord post use different links on purpose.
   assert.ok(!text.includes('r5frrzi6qe8hx'));
 });
+
+// Guard against the announcement losing its place at the head of the set.
+// It is the only post that races anyone, so it has to be created first.
+test('the announcement is composed first', () => {
+  assert.equal(posts[0].slot, 'announcement');
+});

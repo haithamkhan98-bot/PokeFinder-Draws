@@ -140,6 +140,13 @@ const batcher = new Batcher({
             endsAt: usable[0].endsAt,
             imageUrl: drawImage.url,
             asDraft: process.env.BUFFER_LIVE !== 'true',
+            // The announcement publishes immediately under BOTH flags. It has no
+            // dueAt, so without this it would fall through to the Buffer queue
+            // and wait for the next slot instead of going out now.
+            liveSlots: new Set(
+              process.env.BUFFER_LIVE === 'true'
+                || process.env.BUFFER_LIVE_ANNOUNCEMENT === 'true' ? ['announcement'] : [],
+            ),
           });
         } catch (err) {
           publishError = err.message;

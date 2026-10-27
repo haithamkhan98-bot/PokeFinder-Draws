@@ -39,19 +39,23 @@ async function graphql(query) {
  * the post text cannot break out of the literal. Enums are written bare, as
  * GraphQL requires.
  */
-function createPostMutation({ channelId, text, dueAt, saveToDraft, imageUrl, altText }) {
+function createPostMutation({ channelId, text, dueAt, saveToDraft, publishNow, imageUrl, altText }) {
   const fields = [
     `channelId: ${JSON.stringify(channelId)}`,
     `text: ${JSON.stringify(text)}`,
     'schedulingType: automatic',
   ];
 
-  if (dueAt) {
+  if (publishNow) {
+    // Publishing requires BOTH of these. mode alone leaves it a draft.
+    fields.push('mode: shareNow', 'saveToDraft: false');
+  } else if (dueAt) {
     fields.push('mode: customScheduled', `dueAt: ${JSON.stringify(dueAt)}`);
+    if (saveToDraft) fields.push('saveToDraft: true');
   } else {
     fields.push('mode: addToQueue');
+    if (saveToDraft) fields.push('saveToDraft: true');
   }
-  if (saveToDraft) fields.push('saveToDraft: true');
 
   if (imageUrl) {
     const meta = altText ? `, metadata: { altText: ${JSON.stringify(altText)} }` : '';

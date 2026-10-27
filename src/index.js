@@ -6,6 +6,7 @@ import { saveRun, pool, migrate, storeImage } from './db.js';
 import { fetchAndTrim } from './image.js';
 import { startServer, imageUrl, publicBaseUrl, setupKey } from './server.js';
 import { buildDrawImage, MAX_ITEMS } from './draw-image.js';
+import { sampleItems } from './selftest.js';
 import { isConnected as canvaConnected } from './canva.js';
 
 const {
@@ -148,7 +149,53 @@ const batcher = new Batcher({
 client.on(Events.Error, (err) => console.error('discord client error:', err.message));
 client.on(Events.Warn, (msg) => console.warn('discord warning:', msg));
 
+/**
+ * `!drawtest [1-5]` in the alert channel.
+ *
+ * Builds a real draw image from stand in products, through the same code a
+ * live draw uses: trim, pad, upload, autofill, export, store, serve. It exists
+ * so the Canva path can be proved on demand rather than first discovered to be
+ * broken during an actual draw. Nothing is written to draw_runs.
+ */
+async function drawTest(message, raw) {
+  const n = Math.min(Math.max(parseInt(raw, 10) || 3, 1), MAX_ITEMS);
+  const startsAt = DateTime.now().setZone('America/New_York').set({ hour: 17, minute: 0, second: 0, millisecond: 0 });
+
+  await message.reply(`Building a ${n} item test image. This usually takes under a minute.`);
+  const began = Date.now();
+
+  try {
+    const items = await sampleItems(n);
+    const built = await buildDrawImage({
+      runId: null,
+      drawDate: startsAt.toISODate(),
+      startsAt,
+      items,
+    });
+    await message.reply(
+      `Test image built in ${((Date.now() - began) / 1000).toFixed(1)}s.\n`
+      + `${built.url ?? '(stored, but no public domain configured)'}\n`
+      + `${n} slot(s), source shapes ${items.map((i) => i.shape).join(', ')}, `
+      + `${Math.round(built.bytes / 1024)}KB, design ${built.designId}\n`
+      + `Every block should sit square in its slot with no part cut off, and the prices should read `
+      + `${items.map((i) => i.priceDisplay).join(', ')}.`,
+    );
+  } catch (err) {
+    await message.reply(`Test image failed after ${((Date.now() - began) / 1000).toFixed(1)}s: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
+  // The command branch only. The bot check must NOT cover the monitor channel:
+  // the Walmart monitor posts as a bot, so filtering bots there would make the
+  // service deaf to every draw.
+  if (ALERT_CHANNEL_ID && message.channelId === ALERT_CHANNEL_ID) {
+    if (message.author?.bot) return;
+    const cmd = message.content?.trim().match(/^!drawtest(?:\s+(\d+))?$/i);
+    if (cmd) await drawTest(message, cmd[1]);
+    return;
+  }
+
   if (message.channelId !== WALMART_CHANNEL_ID) return;
   if (!message.embeds?.length) return;
 

@@ -97,8 +97,12 @@ export async function buildDrawImage({ runId, drawDate, items, startsAt }) {
   const id = await storeImage(png, { runId, kind: 'draw', mime: 'image/png' });
   const url = imageUrl(id);
 
-  await setRunDesign(runId, design.id);
-  if (url) await setRunImage(runId, url);
+  // runId is null for a self test, which builds a real image through the real
+  // path but has no run to attach it to.
+  if (runId) {
+    await setRunDesign(runId, design.id);
+    if (url) await setRunImage(runId, url);
+  }
 
   return { designId: design.id, imageId: id, url, bytes: png.byteLength, editUrl: design.urls?.edit_url };
 }

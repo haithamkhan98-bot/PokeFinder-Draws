@@ -192,3 +192,26 @@ If it says `Draw image: not built.` the reason follows on the same line. The
 two likely ones are a product photo that would not download, and a draw with
 more items than there are templates (there are five, for one to five items).
 Everything else about the run still succeeded; only the image is missing.
+
+---
+
+## The `!drawtest` command
+
+Type `!drawtest` in the alert channel and the bot builds a real draw image from
+stand in products, using exactly the same code a live draw uses. It replies
+with a link to the finished image. Add a number to change the item count:
+`!drawtest 5` exercises the five slot layout. Valid range is 1 to 5.
+
+Nothing is written to the run history, and it does not touch Buffer. It is
+safe to run whenever you want to check the pipeline is healthy.
+
+The stand in products are deliberately awkward: each is a coloured block inside
+a wide white margin, and every one is a different shape. That is the hard case,
+because the margin has to be trimmed off and the remaining shape padded to fit
+the slot. If the geometry is right, every block sits square in its slot with
+nothing cut off and even spacing throughout. If a block looks stretched, or has
+its top or side sliced away, the padding step is wrong and worth telling me
+about.
+
+Files for this: `src/selftest.js` (new), `src/index.js` and `src/draw-image.js`
+(changed).

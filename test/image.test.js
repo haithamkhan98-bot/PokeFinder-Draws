@@ -71,3 +71,48 @@ test('transparent padding counts as background', async () => {
   assert.equal(box.cropWidth, 20);
   assert.equal(box.cropHeight, 30);
 });
+
+test('a tall product is padded sideways to a square, never cropped', async () => {
+  const { padToAspect } = await import('../src/image.js');
+  const tall = await sharp({ create: { width: 100, height: 200, channels: 3, background: '#1b3a6b' } })
+    .png().toBuffer();
+  const out = await padToAspect(tall, 1);
+  const meta = await sharp(out).metadata();
+  assert.equal(meta.width, 200);
+  assert.equal(meta.height, 200, 'the original height is untouched, width grows to match');
+});
+
+test('a wide product is padded vertically instead', async () => {
+  const { padToAspect } = await import('../src/image.js');
+  const wide = await sharp({ create: { width: 300, height: 100, channels: 3, background: '#1b3a6b' } })
+    .png().toBuffer();
+  const meta = await sharp(await padToAspect(wide, 1)).metadata();
+  assert.equal(meta.width, 300);
+  assert.equal(meta.height, 300);
+});
+
+test('padding uses the canvas colour so the margin is invisible', async () => {
+  const { padToAspect, CANVAS_BACKGROUND } = await import('../src/image.js');
+  const tall = await sharp({ create: { width: 50, height: 100, channels: 3, background: '#000000' } })
+    .png().toBuffer();
+  const out = await padToAspect(tall, 1);
+  const { data } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+  assert.equal(data[0], CANVAS_BACKGROUND.r, 'top left pixel should be the canvas colour');
+  assert.equal(data[1], CANVAS_BACKGROUND.g);
+  assert.equal(data[2], CANVAS_BACKGROUND.b);
+});
+
+test('trim then pad gives a square containing the whole product', async () => {
+  const { prepareForSlot } = await import('../src/image.js');
+  const padded = await sharp({ create: { width: 400, height: 400, channels: 3, background: '#ffffff' } })
+    .composite([{
+      input: await sharp({ create: { width: 60, height: 180, channels: 3, background: '#aa2222' } }).png().toBuffer(),
+      left: 100, top: 60,
+    }])
+    .png().toBuffer();
+  const out = await prepareForSlot(padded, 1);
+  assert.equal(out.box.cropWidth, 60, 'trimmed to the product');
+  assert.equal(out.box.cropHeight, 180);
+  assert.equal(out.width, 180, 'then squared off');
+  assert.equal(out.height, 180);
+});

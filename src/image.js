@@ -7,6 +7,10 @@ const CONTENT_THRESHOLD = 245;
 
 export const MAX_SOURCE_BYTES = 15 * 1024 * 1024;
 
+// The draw canvas background. Padding onto this colour makes the added margin
+// invisible against the design.
+export const CANVAS_BACKGROUND = { r: 255, g: 249, b: 244, alpha: 1 };
+
 /**
  * Find the bounding box of the non white content in an image.
  *
@@ -92,4 +96,43 @@ export async function fetchAndTrim(url, { timeoutMs = 20_000 } = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Pad an image out to a target aspect ratio, centred, on the canvas colour.
+ *
+ * Canva autofill drops an image into a frame of fixed proportions and fills it,
+ * which crops anything that does not match. Every product photo is a different
+ * shape, so without this the tall boxes would lose their tops and bottoms.
+ * Padding to the frame's exact ratio first means the fill is a pure scale with
+ * nothing cut off, and the added margin is invisible against the background.
+ */
+export async function padToAspect(buffer, targetAspect = 1, background = CANVAS_BACKGROUND) {
+  const meta = await sharp(buffer).metadata();
+  const { width, height } = meta;
+  const current = width / height;
+
+  let outW = width, outH = height;
+  if (current < targetAspect) outW = Math.round(height * targetAspect);
+  else if (current > targetAspect) outH = Math.round(width / targetAspect);
+  if (outW === width && outH === height) return buffer;
+
+  return sharp(buffer)
+    .extend({
+      left: Math.floor((outW - width) / 2),
+      right: Math.ceil((outW - width) / 2),
+      top: Math.floor((outH - height) / 2),
+      bottom: Math.ceil((outH - height) / 2),
+      background,
+    })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
+
+/** Trim a product photo to its content, then pad it to the frame's shape. */
+export async function prepareForSlot(buffer, targetAspect = 1) {
+  const { buffer: trimmed, box, trimmed: didTrim } = await trimToContent(buffer);
+  const padded = await padToAspect(trimmed, targetAspect);
+  const meta = await sharp(padded).metadata();
+  return { buffer: padded, box, trimmed: didTrim, width: meta.width, height: meta.height };
 }

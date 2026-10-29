@@ -233,12 +233,14 @@ const dposts = buildDiscordPosts({
 const dBySlot = Object.fromEntries(dposts.map((p) => [p.slot, p]));
 
 test('there are four member posts on the expected anchors', () => {
-  assert.deepEqual(dposts.map((p) => p.slot), ['announcement', 'morning', 'going_live', 'thirty_left']);
-  const at = (slot) => dBySlot[slot].dueAt.setZone('America/New_York').toFormat('HH:mm');
+  assert.deepEqual(dposts.map((p) => p.slot), ['announcement', 'one_hour', 'going_live', 'ten_left']);
+  const at = (slot) => dBySlot[slot].dueAt.setZone('America/New_York').toFormat('HH:mm:ss');
   assert.equal(dBySlot.announcement.dueAt, null);
-  assert.equal(at('morning'), '09:00');
-  assert.equal(at('going_live'), '16:59');
-  assert.equal(at('thirty_left'), '17:30');
+  assert.equal(at('one_hour'), '16:00:00');
+  // On the hour exactly, not a minute early like the tweet.
+  assert.equal(at('going_live'), '17:00:00');
+  // Ten before the close, anchored to the close rather than the open.
+  assert.equal(at('ten_left'), '17:50:00');
 });
 
 // A bot sending the literal text "@PokeFinder+" notifies nobody. Only the
@@ -253,9 +255,9 @@ test('every member post carries the role mention in pingable form', () => {
 test('member posts count down from the right end of the window', () => {
   const start = Math.floor(startsAt.toSeconds());
   const end = Math.floor(endsAt.toSeconds());
-  assert.ok(dBySlot.morning.text.includes(`<t:${start}:F>`));
+  assert.ok(dBySlot.one_hour.text.includes(`<t:${start}:F>`));
   assert.ok(dBySlot.going_live.text.includes(`<t:${end}:F>`));
-  assert.ok(dBySlot.thirty_left.text.includes(`<t:${end}:R>`));
+  assert.ok(dBySlot.ten_left.text.includes(`<t:${end}:R>`));
 });
 
 test('member posts use the Discord link, never the tweet one', () => {
@@ -265,10 +267,10 @@ test('member posts use the Discord link, never the tweet one', () => {
   }
 });
 
-test('only the morning post carries the tips block', () => {
-  assert.ok(dBySlot.morning.text.includes('**Tips for Success:**'));
+test('only the one hour reminder carries the tips block', () => {
+  assert.ok(dBySlot.one_hour.text.includes('**Tips for Success:**'));
   assert.ok(!dBySlot.going_live.text.includes('Tips for Success'));
-  assert.ok(!dBySlot.thirty_left.text.includes('Tips for Success'));
+  assert.ok(!dBySlot.ten_left.text.includes('Tips for Success'));
 });
 
 test('member posts carry the other TCG split too', () => {

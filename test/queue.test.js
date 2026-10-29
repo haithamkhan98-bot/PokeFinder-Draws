@@ -139,7 +139,7 @@ test('the queue posts carry the link once and end at the ad tag', () => {
     headline: 'Pokemon 30th Celebration Elite Trainer Boxes',
     now: et('2026-10-27T20:30'),
   });
-  assert.deepEqual(posts.map((p) => p.slot), ['announcement', 'morning', 'going_live']);
+  assert.deepEqual(posts.map((p) => p.slot), ['announcement', 'fifteen_minutes', 'going_live']);
   for (const p of posts) {
     assert.equal((p.text.match(/howl\.link\/ffngiff7nu8la/g) || []).length, 1);
     assert.ok(p.text.endsWith('#Pokemon #ad'));
@@ -155,7 +155,7 @@ test('queue posts are anchored to the drop, not to when they were written', () =
     now: et('2026-10-27T20:30'),
   });
   const at = (slot) => posts.find((p) => p.slot === slot).dueAt.setZone('America/New_York').toFormat('ccc HH:mm');
-  assert.equal(at('morning'), 'Wed 09:00');
+  assert.equal(at('fifteen_minutes'), 'Wed 20:45');
   assert.equal(at('going_live'), 'Wed 20:59');
 });
 
@@ -456,4 +456,56 @@ test('One Piece outranks Magic even when Magic is the pricier item', () => {
   assert.match(body[0], /^One Piece OP-11 Booster Box /);
   assert.match(body[1], /^MTG Star Trek Collector Booster /);
   assert.ok(text.startsWith('💫 Walmart Queue Going Live at 9PM EST / 6PM PST! One Piece and Magic The Gathering!'));
+});
+
+import { classifyQueue as classifyQ } from '../src/queue.js';
+import { cleanTitle } from '../src/naming.js';
+import { queueHeadline } from '../src/naming.js';
+
+// Merchandise is excluded on the queue side too. A Pokemon plush matched the
+// Pokemon pattern before the merchandise check was added ahead of it.
+test('queue merchandise is excluded, not classified by its game', () => {
+  assert.equal(classifyQ('Pokemon Plush Pikachu 8in'), 'excluded');
+  assert.equal(classifyQ('Pokemon Nendoroid Figure'), 'excluded');
+  assert.equal(classifyQ('One Piece Funko Pop! Luffy'), 'excluded');
+  assert.equal(classifyQ('Pokemon TCG Prismatic Evolutions Booster Bundle'), 'pokemon');
+});
+
+// "Pokemon Trading Card Games" left a stray "s" behind: the stripper only knew
+// the singular. Walmart uses both.
+test('the plural publisher prefix is stripped whole', () => {
+  assert.equal(
+    cleanTitle('Pokemon Trading Card Games 30th Celebration Elite Trainer Box'),
+    '30th Celebration Elite Trainer Box');
+  assert.equal(
+    cleanTitle('Pokemon Trading Card Game Mega Evolution Elite Trainer Box'),
+    'Mega Evolution Elite Trainer Box');
+  assert.equal(
+    cleanTitle('Pokemon TCG Prismatic Evolutions Booster Bundle'),
+    'Prismatic Evolutions Booster Bundle');
+});
+
+test('a given headline fallback is used when the model cannot be reached', async () => {
+  const key = process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  try {
+    const res = await queueHeadline([], { fallback: 'Prismatic Evolutions and One Piece' });
+    assert.equal(res.headline, 'Prismatic Evolutions and One Piece');
+    assert.equal(res.source, 'local');
+  } finally {
+    if (key !== undefined) process.env.ANTHROPIC_API_KEY = key;
+  }
+});
+
+test('the 15 minute reminder reads as a reminder, the go live post does not', () => {
+  const posts = buildQueuePosts({
+    items: [item('Pokemon TCG 30th Celebration ETB', 5999, 'pokemon')],
+    dropAt: et('2026-10-28T21:00'),
+    headline: '30th Celebration',
+    now: et('2026-10-27T20:30'),
+  });
+  const text = (slot) => posts.find((p) => p.slot === slot).text;
+  assert.match(text('fifteen_minutes'), /^💫 Reminder: 30th Celebration Going Live on Walmart in 15 Minutes!/);
+  assert.match(text('going_live'), /^💫 30th Celebration Going Live on Walmart Now!/);
+  assert.ok(!posts.some((p) => p.slot === 'morning'));
 });

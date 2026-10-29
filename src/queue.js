@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { parsePrice, suggestName, isNowLive, resolveLink } from './parse.js';
+import { parsePrice, suggestName, isNowLive, resolveLink, NOT_CARDS } from './parse.js';
 
 export const QUEUE_AUTHOR = 'Walmart Droplist';
 
@@ -65,6 +65,9 @@ export const GROUP_LABEL = {
 export function classifyQueue(title) {
   const t = title ?? '';
   if (EXCLUDE.some((re) => re.test(t))) return 'excluded';
+  // Merchandise before games, or a Pokemon plush classifies as Pokemon. Shares
+  // the draw path's list so the two can never disagree about what is a card.
+  if (NOT_CARDS.some((re) => re.test(t))) return 'excluded';
   for (const [game, patterns] of GAMES) {
     if (patterns.some((re) => re.test(t))) return game;
   }

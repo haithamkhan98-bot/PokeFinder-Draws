@@ -267,10 +267,12 @@ export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
       ].join('\n'),
     },
     {
-      slot: 'morning',
-      dueAt: et.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }),
+      // An hour out, not 9AM. Members get the announcement the moment the
+      // draw is known and one reminder close enough to act on.
+      slot: 'one_hour',
+      dueAt: et.minus({ hours: 1 }),
       text: [
-        `# Reminder: Walmart Draws Go Live Today at ${when}`,
+        `# Reminder: Walmart Draws Go Live in 1 Hour at ${when}`,
         '',
         `**${label} ${noun} opens <t:${start}:F> (<t:${start}:R>)** ${role}`,
         '',
@@ -282,9 +284,10 @@ export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
       ].join('\n'),
     },
     {
-      // One minute before the draw opens, matching the tweet.
+      // On the hour, not a minute early like the tweet: the tweet gets ahead
+      // of the draw on purpose, this one marks it actually opening.
       slot: 'going_live',
-      dueAt: et.minus({ minutes: 1 }),
+      dueAt: et,
       text: [
         '# Walmart Draws Going Live! Entries Accepted for 1 Hour',
         '',
@@ -296,10 +299,12 @@ export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
       ].join('\n'),
     },
     {
-      slot: 'thirty_left',
-      dueAt: et.plus({ minutes: 30 }),
+      // Anchored to the close rather than to the open, so a draw that ever
+      // runs longer than an hour still gets its reminder in the last ten.
+      slot: 'ten_left',
+      dueAt: endsAt.setZone('America/New_York').minus({ minutes: 10 }),
       text: [
-        '# 30 Minutes Left to Enter the Walmart Draws',
+        '# 10 Minutes Left to Enter the Walmart Draws',
         '',
         `**${label} ${noun} closes <t:${end}:R>** ${role}`,
         '',

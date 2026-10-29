@@ -30,6 +30,7 @@ const {
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
+  QUEUE_LIVE,
 } = process.env;
 
 // Discord only pings when given the role ID. The literal text "@PokeFinder+"
@@ -158,7 +159,9 @@ const batcher = new Batcher({
           // If a queue drop for this same day has already been collected, the
           // draw's closing post announces it instead of ending flat.
           let overText = null;
-          const queued = await queueRunOn(drawDate).catch(() => null);
+          // Only when queue posting is live. While the queue is in drafts its
+          // wording must not reach a real draw post.
+          const queued = QUEUE_LIVE === 'true' ? await queueRunOn(drawDate).catch(() => null) : null;
           if (queued?.items?.length) {
             overText = drawOverWithQueue({
               items: queued.items,
@@ -306,13 +309,17 @@ const queueBatcher = new Batcher({
         items: usable,
         dropAt,
         now: DateTime.now(),
-        asDraft: process.env.BUFFER_LIVE !== 'true',
-        publishAnnouncement: process.env.BUFFER_LIVE === 'true'
-          || process.env.BUFFER_LIVE_ANNOUNCEMENT === 'true',
+        // Queue posts have their own flag. BUFFER_LIVE is the draws' and is
+        // already on; the queue stays in drafts until QUEUE_LIVE says
+        // otherwise, so the first real run can be checked before it posts.
+        asDraft: QUEUE_LIVE !== 'true',
+        publishAnnouncement: QUEUE_LIVE === 'true',
       });
 
       await alert(
         `**Queue run ready** ${dropDate} (fired on ${reason}, run #${res.runId})\n`
+        + (QUEUE_LIVE === 'true' ? '' : 'DRAFTS ONLY. Nothing is scheduled or published and the '
+          + 'draw closing post was not touched. Set QUEUE_LIVE=true to go live.\n')
         + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
         + `Headline (${report.headline.source}): ${report.headline.headline}\n`
         + `Items: ${usable.length}`
@@ -326,7 +333,12 @@ const queueBatcher = new Batcher({
         + `\nPosts:\n${summariseQueue(report)}`,
       );
 
-      if (report.handoff?.attempted) {
+      if (report.handoff?.dryRun) {
+        await alert(
+          `Draw closing post for ${dropDate} was NOT rewritten, because queue posts are drafts.\n`
+          + `This is the text it would have written:\n\n${report.handoff.text}`,
+        );
+      } else if (report.handoff?.attempted) {
         const ok = report.handoff.results.filter((r) => r.ok).length;
         await alert(
           `Draw closing post for ${dropDate} rewritten to announce the queue on `
@@ -645,7 +657,7 @@ client.once(Events.ClientReady, (c) => {
     console.log('DISCORD_MEMBER_CHANNEL_ID is not set, so no member draw posts will be sent');
   }
   console.log(QUEUE_ENABLED === 'true'
-    ? 'queue monitoring is ON, Walmart Droplist embeds will be collected'
+    ? `queue monitoring is ON, posting ${QUEUE_LIVE === 'true' ? 'LIVE' : 'to DRAFTS only'}`
     : 'queue monitoring is OFF, set QUEUE_ENABLED=true to turn it on');
   console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
 });

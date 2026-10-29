@@ -7,8 +7,12 @@ import { claimDueDiscordPosts, markDiscordPosted, markDiscordFailed } from './db
  * crash cannot lose a post. This only has to notice that something is due,
  * which a short poll does perfectly well and far more simply than anything
  * clever.
+ *
+ * The poll interval is the worst case lateness: a post due at 5:00:00 goes out
+ * between 5:00:00 and 5:00:10. Ten seconds costs one indexed query every ten
+ * seconds and buys a go live post that reads as on the hour.
  */
-export function startDiscordScheduler(client, { intervalMs = 30_000, onError } = {}) {
+export function startDiscordScheduler(client, { intervalMs = 10_000, onError } = {}) {
   let running = false;
 
   const tick = async () => {

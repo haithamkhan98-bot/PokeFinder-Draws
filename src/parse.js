@@ -23,7 +23,7 @@ const EXCLUDE = [
 
 // Walmart puts plenty of non card merchandise through the same draws. None of
 // it belongs in a PokeFinder post, so it is dropped rather than categorised.
-const NOT_CARDS = [
+export const NOT_CARDS = [
   /\bnendoroid\b/i, /\bfigur(e|ine)s?\b/i, /\bfunko\b/i, /\bpop!\b/i,
   /\bplush(ie)?\b/i, /\bstatue\b/i, /\bplaymat\b/i, /\bbackpack\b/i,
   /\bkeychain\b/i, /\blego\b/i, /\bpuzzle\b/i, /\bapparel\b/i,

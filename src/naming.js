@@ -16,8 +16,7 @@ export const KNOWN_SETS = [
 ].sort((a, b) => b.length - a.length);
 
 const NOISE = [
-  /^Pok[eé]mon Trading Card Game:?/i, /^Pok[eé]mon TCG:?/i, /^Pokemon TCG:?/i,
-  /^Pokemon Trading Card Game:?/i, /Scarlet\s*&?\s*Violet[-—:]?/i,
+  /^Pok[eé]mon Trading Card Games?:?/i, /^Pok[eé]mon TCGs?:?/i, /Scarlet\s*&?\s*Violet[-—:]?/i,
   /\bSV\s*\d+(\.\d+)?\b/i, /\b20\d\d\b/,
 ];
 
@@ -158,8 +157,8 @@ Rules:
  * leading product of each group, which is always defensible even if it reads
  * less naturally than the model's version.
  */
-export async function queueHeadline(groups, { timeoutMs = 20_000 } = {}) {
-  const fallback = fallbackHeadline(groups);
+export async function queueHeadline(groups, { timeoutMs = 20_000, fallback: given = null } = {}) {
+  const fallback = given || fallbackHeadline(groups);
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return { headline: fallback, source: 'local', note: 'ANTHROPIC_API_KEY is not set' };
 

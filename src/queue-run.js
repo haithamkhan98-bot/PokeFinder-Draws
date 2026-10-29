@@ -1,6 +1,7 @@
 import { groupQueue, orderedQueueItems } from './queue.js';
 import {
   buildQueuePosts, linkList, productBlock, drawOverWithQueue, potentialQueuePost, isFirstPartySeller,
+  queueSummary,
 } from './queue-copy.js';
 import { buildGrid } from './grid.js';
 import { nameItems, queueHeadline } from './naming.js';
@@ -30,7 +31,10 @@ export async function runQueue({ runId, items, dropAt, now, asDraft = true, publ
   const ordered = orderedQueueItems(named);
   const groups = groupQueue(named);
 
-  const head = await queueHeadline(groups);
+  // The fallback is the same summary rule the late queue draft uses: Pokemon by
+  // set, every other game by name, sports by line. It reads like HK's own
+  // wording, which the old lead-product fallback did not.
+  const head = await queueHeadline(groups, { fallback: queueSummary(named) });
   report.headline = head;
 
   // Photos, then the grid.
@@ -88,6 +92,7 @@ export async function runQueue({ runId, items, dropAt, now, asDraft = true, publ
     dropDate: dropAt.setZone('America/New_York').toISODate(),
     items: ordered,
     dropAt,
+    dryRun: asDraft,
   });
 
   if (runId) {
@@ -118,7 +123,7 @@ export function summariseQueue(report) {
  * The existing image is left alone: omitting assets from an edit preserves
  * them, and that post is still the draw's, so it keeps the draw's picture.
  */
-export async function foldIntoDrawClosingPost({ dropDate, items, dropAt }) {
+export async function foldIntoDrawClosingPost({ dropDate, items, dropAt, dryRun = false }) {
   let posts;
   try {
     posts = await drawOverPostsOn(dropDate);
@@ -128,6 +133,10 @@ export async function foldIntoDrawClosingPost({ dropDate, items, dropAt }) {
   if (!posts.length) return { attempted: false, reason: 'no draw on this date' };
 
   const text = drawOverWithQueue({ items, dropAt });
+  // A dry run must not touch the draw's closing post: that post is already
+  // scheduled and real. Report the text it would have written instead.
+  if (dryRun) return { attempted: false, dryRun: true, reason: 'queue posts are drafts', text };
+
   const results = [];
   for (const row of posts) {
     try {

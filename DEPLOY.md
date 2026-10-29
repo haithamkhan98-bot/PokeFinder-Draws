@@ -631,3 +631,24 @@ The late "Potential WM Droplist" draft is unaffected: it is always a draft,
 whatever these flags say.
 
 Boot logs which mode it is in: `queue monitoring is ON, posting to DRAFTS only`.
+
+### The member Discord schedule
+
+| slot | when |
+| --- | --- |
+| announcement | immediately, with the run |
+| one_hour | 4:00PM, an hour before the draw opens |
+| going_live | 5:00PM exactly |
+| ten_left | 5:50PM, ten minutes before the close |
+
+`going_live` is on the hour, not a minute early like the tweet: the tweet gets
+ahead of the draw on purpose, this post marks it actually opening. The ticker
+polls every ten seconds, so the worst case is ten seconds late. Shorten the
+interval, or move the slot to 16:59:30, if it has to be early rather than
+late.
+
+`ten_left` is anchored to the close rather than the open, so a draw that ever
+runs longer than an hour still gets its reminder in the last ten minutes.
+
+The tweet schedule is untouched: 9AM morning, 10 minutes out, 4:59PM go live,
+30 minutes left.

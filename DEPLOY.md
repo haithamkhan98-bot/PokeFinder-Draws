@@ -395,3 +395,171 @@ crash therefore cannot lose the going live post, which in memory timers would.
 
 A post that fails is retried on the next tick, up to five times, and each
 failure is reported to the alert channel with the reason.
+
+---
+
+## Walmart queue runs
+
+The Droplist monitor posts to the same channel as the draw monitor, under the
+author name "Walmart Droplist". Those embeds are now collected into queue runs.
+
+### Turning it on
+
+```
+QUEUE_ENABLED=true
+```
+
+Leave it unset and queue embeds are ignored exactly as they are today, so you
+can deploy this and look at it before anything goes live.
+
+### What is different from a draw
+
+| | Draws | Queue |
+|---|---|---|
+| Timing | read from the embed | worked out: next Wednesday 9PM ET |
+| Channels | PokemonFindr and CollectFinder | CollectFinder only |
+| Posts | seven | three: announcement, 9AM reminder, 8:59PM going live |
+| Image | Canva template, prices shown | composited grid, no prices |
+| Grouping | Pokemon, then other card games | Pokemon, Magic, One Piece, Sports Cards |
+
+### The drop date
+
+Queue embeds carry no time at all, so the bot uses the next Wednesday 9PM
+Eastern that has not already passed. Embeds landing Tuesday evening point at
+the following night. Embeds landing after a Wednesday drop roll on a week.
+
+### Ordering
+
+Groups run Pokemon, Magic: The Gathering, One Piece, Sports Cards, then
+anything else. Inside each group it is price descending, except that Magic
+leads with its Collector products and sports cards lead with Topps, with the
+Bowman and Chrome titles first inside that. Upper Deck and College products are
+excluded entirely.
+
+### The grid
+
+Queue images are composited directly rather than built in Canva. A queue grid
+is only product photos on the standard background with no text, and its canvas
+has to scale with the item count, which would otherwise need a separate Canva
+template for every count and every canvas size. Layout follows the existing
+convention: three across for three items, three then two for five, four then
+three for seven, three by three for nine.
+
+### Trying it first
+
+`!queuepreview` in the alert channel builds a whole run from stand in products
+across several games and prints it, with the grid attached as an image. Nothing
+reaches Buffer. Add a number for more items, up to 8. The eighth stand in is an
+Upper Deck product, so running `!queuepreview 8` also shows the exclusion
+working.
+
+### When a draw and a queue drop fall on the same day
+
+Both land on Wednesdays, so the draw's 6PM closing post now hands the audience
+straight on to the 9PM queue instead of ending flat:
+
+```
+💫 Today's Walmart Draw is Now Over! Next we have a Walmart Queue drop at 9PM EST / 6PM PST!
+
+Queue Link: https://howl.link/ffngiff7nu8la
+
+Pokemon
+• ...
+
+Magic: The Gathering
+• ...
+
+#Pokemon #ad
+```
+
+It ends at `#Pokemon #ad` rather than plain `#Pokemon`, because unlike the
+ordinary closing post this one carries a link.
+
+This works whichever run fires first. If the draw run goes first, the queue run
+rewrites the already scheduled closing post. If the queue run goes first, the
+draw run composes the closing post with the queue in it from the start. The
+draw image stays attached either way, since that post is still the draw's.
+
+The rewrite uses Buffer's `editPost` mutation. Buffer documents the mutation
+but not the name of its id field, so the bot tries `id` and falls back to
+`postId`, remembering which worked. The run summary says how many channels were
+rewritten.
+
+### Affiliate links
+
+The bot takes each item's link from the embed's own title link, which Discord
+carries on every embed. If you have set the affiliate mapping on the monitor
+side, that link arrives already affiliated and is used as is.
+
+A link is treated as an affiliate link when its host matches one of:
+
+```
+howl.link, mavely.app.link, go.magik.ly, shopmy.us
+```
+
+Override with `AFFILIATE_HOSTS` in Railway, comma separated, if you add
+another network.
+
+Anything else, including a plain walmart.com URL and a missing link, falls back
+to `https://www.walmart.com/ip/PokeFinder/[PID]`, exactly as before.
+
+Every run summary reports coverage, for example `Affiliate links: 7/9 came
+from the monitor`. If that reads 0 out of N, the monitor mapping is not set for
+those products and the posts are earning nothing.
+
+This is deliberately not a Google Sheet lookup. The Sheet would need a service
+account, would add a lookup that can fail mid run, and would be a second place
+affiliate links live. The monitor already knows the mapping.
+
+### Marketplace sellers in the late queue
+
+The potential droplist embeds carry a predicted seller. Walmart.com, and a
+missing seller, are first party and stay in the main list. Anything else is a
+marketplace seller and gets its own list below, under the seller's name as the
+monitor reports it:
+
+```
+GT Collectibles and Toys
+Pokemon TCG Prismatic Evolutions Booster Bundle https://howl.link/...
+```
+
+Nothing is filtered out. If every item is first party there is no heading at
+all, so the post reads exactly as it did before. Sellers are ordered by the
+best priority item each one has, and inside a section the usual game order
+still applies. The grid image is unchanged: all items, one priority order.
+
+### The late queue summary line and shortened names
+
+The title now carries a product summary: Pokemon by set name alone, every
+other card game by the game's name, sports cards by their line.
+
+```
+💫 Walmart Queue Going Live at 9PM EST / 6PM PST! Mega Evolution, Prismatic Evolutions, Magic The Gathering and Topps Chrome!
+```
+
+Groups keep the order the product lists use, so the summary and the lists never
+disagree about what leads. That order is Pokemon, One Piece, Magic, Sports,
+Other, set once in `GROUP_ORDER` in `src/queue.js` and used by the summary, the
+product lists, the group headings and the grid alike. A set with several products is named once. A Pokemon
+item whose set the naming step could not place contributes "Pokemon".
+
+Sports lines live in `SPORTS_LINES` in `src/queue-copy.js`, longest first. An
+unrecognised brand falls back to "Sports Cards"; add the brand to that list to
+name it.
+
+Product list names are shortened for these queue posts only. The whole rule:
+
+| out | |
+| --- | --- |
+| Pokemon Trading Card Game(s), Pokemon TCG | removed |
+| Trading Card(s), Trading Card Game(s) | removed |
+| Collectible Card Game | removed |
+| a leading "Sports Cards" | removed |
+| Magic: The Gathering | MTG |
+| One Piece Card Game | One Piece |
+| Elite Trainer Box | ETB |
+| Ultra Premium Collection | UPC |
+
+Nothing else is touched, so pack counts, variant names and set names all stay.
+The standard queue posts are unchanged: their group headings already carry the
+game, so their names are short already.

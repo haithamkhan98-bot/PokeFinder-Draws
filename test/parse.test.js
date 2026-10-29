@@ -97,3 +97,28 @@ test('prices parse to cents', () => {
   assert.equal(parsePrice('150.0 USD'), 15000);
   assert.equal(parsePrice('$1,299.99'), 129999);
 });
+
+test('a "Raffle Now Live" embed is ignored rather than reported as unreadable', () => {
+  const live = {
+    author: { name: 'Walmart Draws' },
+    title: 'Pokemon Trading Card Game Scarlet & Violet Prismatic Evolutions Elite Trainer Box',
+    fields: [
+      { name: 'Price', value: '$69.00' },
+      { name: 'Type', value: 'Raffle Now Live' },
+      { name: 'PID', value: '18170913799' },
+      { name: 'Cart Limit', value: '3' },
+      { name: 'Seller', value: 'Walmart.com' },
+    ],
+  };
+  assert.equal(parseEmbed(live, { now: DateTime.fromISO('2026-10-28T17:00', { zone: 'America/New_York' }) }), null);
+});
+
+test('a draw embed with no Time and no live marker is still reported', () => {
+  const broken = {
+    author: { name: 'Walmart Draws' },
+    title: 'Something',
+    fields: [{ name: 'Price', value: '$1.00' }, { name: 'PID', value: '1' }],
+  };
+  const res = parseEmbed(broken, { now: DateTime.now() });
+  assert.match(res.error, /missing Time/);
+});

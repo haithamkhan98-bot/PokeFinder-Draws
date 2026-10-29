@@ -133,3 +133,78 @@ export const setsOf = (items) => [...new Set(
 )];
 
 export { setsLabel };
+
+const HEADLINE_PROMPT = `You write the opening line of a PokeFinder tweet announcing a Walmart queue drop.
+
+You are given the products, grouped by game, already in the order they must be named.
+
+Return JSON only: {"headline":"..."}
+
+The headline is the product summary ONLY. Do not write "Going Live", a date, a time, emoji, hashtags or any punctuation at the end. That wording is added around it.
+
+Rules:
+- Name the groups in the order given. Pokemon first when present.
+- For each group name its standout products, not every product. Two or three names across the whole headline is plenty.
+- Write product names the way a collector would: "Magic The Gathering Star Trek Collector Boosters", "30th Celebration Elite Trainer Boxes", "Topps Bowman Football".
+- Write "Magic The Gathering" without the colon.
+- Where a group has many items and no standout, name the category instead, for example "Sports Cards".
+- Join with commas and a final "and".`;
+
+/**
+ * The product summary that opens each queue post.
+ *
+ * This is the one genuinely editorial line in a queue run: which products are
+ * worth naming out of a list that can run to a dozen. The fallback names the
+ * leading product of each group, which is always defensible even if it reads
+ * less naturally than the model's version.
+ */
+export async function queueHeadline(groups, { timeoutMs = 20_000 } = {}) {
+  const fallback = fallbackHeadline(groups);
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return { headline: fallback, source: 'local', note: 'ANTHROPIC_API_KEY is not set' };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(API, {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 400,
+        system: HEADLINE_PROMPT,
+        messages: [{
+          role: 'user',
+          content: JSON.stringify(groups.map((g) => ({
+            group: g.label,
+            products: g.items.map((i) => i.postName ?? i.productName ?? i.rawTitle),
+          }))),
+        }],
+      }),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`);
+    const body = await res.json();
+    const text = body.content?.map((c) => c.text).join('') ?? '';
+    const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    const headline = String(parsed.headline ?? '').trim();
+    if (!headline) throw new Error('the model returned an empty headline');
+    return { headline, source: 'model', note: null };
+  } catch (err) {
+    return { headline: fallback, source: 'local', note: `headline fell back to the local wording: ${err.message}` };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function fallbackHeadline(groups) {
+  const parts = groups.map((g) => {
+    const lead = g.items[0];
+    const name = lead?.postName ?? lead?.productName ?? lead?.rawTitle ?? '';
+    if (g.game === 'sports' || !name) return g.label;
+    return name;
+  });
+  if (parts.length <= 1) return parts[0] ?? '';
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}

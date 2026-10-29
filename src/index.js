@@ -9,6 +9,13 @@ import { buildDrawImage, MAX_ITEMS, headingFor } from './draw-image.js';
 import { sampleItems } from './selftest.js';
 import { publishRun, summarise } from './publish.js';
 import { nameItems, setsOf } from './naming.js';
+import { parseQueueEmbed, parsePotentialQueueEmbed, QUEUE_AUTHOR, groupQueue, orderedQueueItems } from './queue.js';
+import { runQueue, summariseQueue, runPotentialQueue } from './queue-run.js';
+import { saveQueueRun, queueRunOn } from './db.js';
+import { buildQueuePosts, linkList, drawOverWithQueue } from './queue-copy.js';
+import { buildGrid } from './grid.js';
+import { queueHeadline } from './naming.js';
+import { nextDropAt } from './queue.js';
 import { buildPosts, winsPost, discordPost, buildDiscordPosts } from './copy.js';
 import { startDiscordScheduler } from './discord-schedule.js';
 import { scheduleDiscordPost } from './db.js';
@@ -22,6 +29,7 @@ const {
   CEILING_MS = 1_200_000,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
+  QUEUE_ENABLED,
 } = process.env;
 
 // Discord only pings when given the role ID. The literal text "@PokeFinder+"
@@ -147,8 +155,20 @@ const batcher = new Batcher({
         publishError = 'skipped, because BUFFER_TOKEN is not set';
       } else {
         try {
+          // If a queue drop for this same day has already been collected, the
+          // draw's closing post announces it instead of ending flat.
+          let overText = null;
+          const queued = await queueRunOn(drawDate).catch(() => null);
+          if (queued?.items?.length) {
+            overText = drawOverWithQueue({
+              items: queued.items,
+              dropAt: DateTime.fromJSDate(queued.dropsAt).setZone('America/New_York'),
+            });
+          }
+
           publish = await publishRun({
             runId: res.runId,
+            overText,
             items: usable,
             startsAt: usable[0].startsAt,
             endsAt: usable[0].endsAt,
@@ -237,6 +257,137 @@ const batcher = new Batcher({
       }
     } catch (err) {
       await alert(`Draw ${drawDate} failed while saving the run: ${err.message}`);
+    }
+  },
+});
+
+/**
+ * The queue batcher.
+ *
+ * Separate from the draw batcher because the two are grouped on different
+ * keys and produce different output, but the batching behaviour is identical:
+ * queue embeds also land in one burst.
+ */
+const queueBatcher = new Batcher({
+  quietMs: Number(QUIET_PERIOD_MS),
+  ceilingMs: Number(CEILING_MS),
+  keyOf: (item) => item.dropDate,
+  onLate: async ({ drawDate, item }) => {
+    await alert(
+      `**Late queue item for the ${drawDate} drop**\n`
+      + `${item.productName} (${item.pid}) ${item.priceDisplay} arrived after the run had fired, `
+      + `so the posts and the grid do not include it.`,
+    );
+  },
+  onFire: async ({ drawDate: dropDate, items, reason }) => {
+    const usable = items.filter((i) => i.classification !== 'excluded');
+    const dropped = items.filter((i) => i.classification === 'excluded');
+
+    try {
+      if (!usable.length) {
+        await alert(`Queue drop ${dropDate}: ${items.length} item(s), all excluded. Nothing to post.`);
+        return;
+      }
+
+      const dropAt = usable[0].dropAt;
+      const res = await saveQueueRun({ dropDate, dropsAt: dropAt.toISO(), items: usable });
+      if (res.amend) {
+        await alert(`Queue drop ${dropDate} already ran (status ${res.status}) and more items arrived. Needs handling by hand.`);
+        return;
+      }
+
+      if (!process.env.BUFFER_TOKEN) {
+        await alert(`Queue drop ${dropDate}: ${usable.length} item(s) saved, but BUFFER_TOKEN is not set so nothing was posted.`);
+        return;
+      }
+
+      const report = await runQueue({
+        runId: res.runId,
+        items: usable,
+        dropAt,
+        now: DateTime.now(),
+        asDraft: process.env.BUFFER_LIVE !== 'true',
+        publishAnnouncement: process.env.BUFFER_LIVE === 'true'
+          || process.env.BUFFER_LIVE_ANNOUNCEMENT === 'true',
+      });
+
+      await alert(
+        `**Queue run ready** ${dropDate} (fired on ${reason}, run #${res.runId})\n`
+        + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
+        + `Headline (${report.headline.source}): ${report.headline.headline}\n`
+        + `Items: ${usable.length}`
+        + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')
+        + `\nGrid: ${report.image
+            ? `${report.image.url} (${report.image.layout}, ${report.image.width}x${report.image.height})`
+            : `not built. ${report.imageError}`}`
+        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} came from the monitor`
+        + (report.affiliate.covered < report.affiliate.total
+          ? ', the rest fall back to plain PokeFinder links' : '')
+        + `\nPosts:\n${summariseQueue(report)}`,
+      );
+
+      if (report.handoff?.attempted) {
+        const ok = report.handoff.results.filter((r) => r.ok).length;
+        await alert(
+          `Draw closing post for ${dropDate} rewritten to announce the queue on `
+          + `${ok}/${report.handoff.results.length} channel(s).`
+          + (ok < report.handoff.results.length
+            ? `\n  ${report.handoff.results.filter((r) => !r.ok).map((r) => r.error).join('; ')}`
+            : ''),
+        );
+      }
+
+      await alert(`Queue link list for ${dropDate}:\n\n${report.list}`);
+    } catch (err) {
+      await alert(`Queue drop ${dropDate} failed: ${err.message}`);
+    }
+  },
+});
+
+/**
+ * The late queue batcher.
+ *
+ * Kept apart from the standard queue: these arrive minutes before the drop
+ * rather than the day before, produce one draft rather than three live posts,
+ * and must never be mixed into a standard run that may already have fired.
+ */
+const potentialBatcher = new Batcher({
+  quietMs: Number(QUIET_PERIOD_MS),
+  ceilingMs: Number(CEILING_MS),
+  keyOf: (item) => `potential-${item.dropDate}`,
+  onFire: async ({ items, reason }) => {
+    const usable = items.filter((i) => i.classification !== 'excluded');
+    const dropped = items.filter((i) => i.classification === 'excluded');
+    try {
+      if (!usable.length) {
+        await alert(`Potential queue: ${items.length} item(s), all excluded. Nothing drafted.`);
+        return;
+      }
+      if (!process.env.BUFFER_TOKEN) {
+        await alert(`Potential queue: ${usable.length} item(s) detected, but BUFFER_TOKEN is not set.`);
+        return;
+      }
+
+      const dropAt = usable[0].dropAt;
+      const report = await runPotentialQueue({ items: usable, dropAt });
+      const ok = report.results.filter((r) => r.ok).length;
+
+      await alert(
+        `**Potential queue draft ready** (fired on ${reason})\n`
+        + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
+        + `Items: ${usable.length}`
+        + (dropped.length ? `, ${dropped.length} excluded` : '')
+        + `\nGrid: ${report.image ? `${report.image.url} (${report.image.layout})` : `not built. ${report.imageError}`}`
+        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} came from the monitor`
+        + `\nDraft: ${ok}/${report.results.length} created, NOT published`
+        + (report.results.some((r) => !r.ok)
+          ? `\n  ${report.results.filter((r) => !r.ok).map((r) => r.error).join('; ')}` : '')
+        + (report.thirdParty.length
+          ? `\nSold by someone other than Walmart: ${report.thirdParty.join('; ')}` : ''),
+      );
+      await alert(`Potential queue draft text:\n\n${report.text}`);
+    } catch (err) {
+      await alert(`Potential queue run failed: ${err.message}`);
     }
   },
 });
@@ -341,6 +492,70 @@ async function drawPreview(message, raw) {
   }
 }
 
+/**
+ * `!queuepreview [1-8]` in the alert channel.
+ *
+ * Composes a whole queue run from stand in products across several games and
+ * prints it, with the grid attached. Nothing reaches Buffer and nothing is
+ * stored. It exists so the grouping, the ordering and the headline can be read
+ * before a real drop is trusted to them.
+ */
+async function queuePreview(message, raw) {
+  const n = Math.min(Math.max(parseInt(raw, 10) || 5, 1), 8);
+  const dropAt = nextDropAt(DateTime.now());
+
+  const STAND_IN = [
+    ['Pokemon TCG: 30th Celebration Elite Trainer Box', 5999, 'pokemon'],
+    ['Magic: The Gathering Star Trek Collector Booster Box', 24999, 'mtg'],
+    ['2026 Topps Bowman Chrome Football Trading Cards Value Box', 2997, 'sports'],
+    ['One Piece Card Game OP-11 Booster Box', 9588, 'onepiece'],
+    ['Magic: The Gathering Star Trek Play Booster Box', 14999, 'mtg'],
+    ['Pokemon TCG: Prismatic Evolutions Booster Bundle', 7994, 'pokemon'],
+    ['2026 Panini Prizm Basketball Mega Box', 5999, 'sports'],
+    ['2026 Upper Deck Series 1 Hockey Blaster', 2999, 'excluded'],
+  ].slice(0, n);
+
+  try {
+    const photos = await sampleItems(Math.min(n, 5));
+    const items = STAND_IN.map(([rawTitle, cents, game], i) => ({
+      pid: `preview-${i + 1}`,
+      rawTitle,
+      productName: rawTitle,
+      postName: rawTitle,
+      priceCents: cents,
+      priceDisplay: `$${(cents / 100).toFixed(2)}`,
+      classification: game,
+      buffer: photos[i % photos.length].buffer,
+    }));
+
+    const usable = items.filter((i) => i.classification !== 'excluded');
+    const groups = groupQueue(usable);
+    const ordered = orderedQueueItems(usable);
+    const head = await queueHeadline(groups);
+    const grid = await buildGrid(ordered);
+    const posts = buildQueuePosts({ items: ordered, dropAt, headline: head.headline, now: DateTime.now() });
+
+    await message.reply({
+      content: `Dry run, ${usable.length} item(s), ${items.length - usable.length} excluded. `
+        + `Nothing sent to Buffer.\n`
+        + `Drop worked out as ${dropAt.toFormat('ccc LLL d')} at 9PM EST.\n`
+        + `Headline came from the ${head.source}${head.note ? ` (${head.note})` : ''}.\n`
+        + `Grid ${grid.counts.join('+')}, ${grid.width}x${grid.height}.`,
+      files: [{ attachment: grid.buffer, name: `queue-grid-${ordered.length}.png` }],
+    });
+
+    for (const post of posts) {
+      const when = post.dueAt
+        ? post.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')
+        : 'published immediately';
+      await message.channel.send(`**${post.slot}** (${when})\n\n${post.text}`.slice(0, 1990));
+    }
+    await message.channel.send(`**Link list**\n\n${linkList(ordered)}`.slice(0, 1990));
+  } catch (err) {
+    await message.reply(`Queue preview failed: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   // The command branch only. The bot check must NOT cover the monitor channel:
   // the Walmart monitor posts as a bot, so filtering bots there would make the
@@ -354,6 +569,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     const preview = content.match(/^!drawpreview(?:\s+(\d+))?$/i);
     if (preview) { await drawPreview(message, preview[1]); return; }
+
+    const qpreview = content.match(/^!queuepreview(?:\s+(\d+))?$/i);
+    if (qpreview) { await queuePreview(message, qpreview[1]); return; }
 
     return;
   }
@@ -370,7 +588,40 @@ client.on(Events.MessageCreate, async (message) => {
       continue;
     }
 
-    if (item === null) continue;                 // not a draw, almost always the restock monitor
+    if (item === null) {
+      // Not a draw. It may still be a queue item from the Droplist monitor,
+      // which posts to this same channel.
+      if (QUEUE_ENABLED !== 'true') continue;
+      let q;
+      try {
+        q = parseQueueEmbed(embed, { now: DateTime.now() });
+      } catch (err) {
+        await alert(`Could not parse a queue embed from ${message.url}: ${err.message}`);
+        continue;
+      }
+      if (q === null) {
+        // The late queue comes through the restock monitor, flagged in its
+        // title. Everything else from that monitor stays ignored.
+        const pq = parsePotentialQueueEmbed(embed, { now: DateTime.now() });
+        if (pq === null) continue;
+        if (pq.error) {
+          await alert(`A potential queue embed could not be read and was ignored: ${pq.error}\n${message.url}`);
+          continue;
+        }
+        const pr = potentialBatcher.add(pq);
+        console.log(`${pr.joined ? 'added' : 'repeat'} potential ${pq.pid} ${pq.productName} (${pr.size} held)`);
+        continue;
+      }
+      if (q.error) {
+        await alert(`A "${QUEUE_AUTHOR}" embed could not be read and was ignored: ${q.error}\n${message.url}`);
+        continue;
+      }
+      const r = queueBatcher.add(q);
+      console.log(
+        `${r.joined ? 'added' : 'repeat'} queue ${q.pid} ${q.productName} -> drop ${q.dropDate} (${r.size} held)`,
+      );
+      continue;
+    }
 
     if (item.error) {
       await alert(`A "${DRAW_AUTHOR}" embed could not be read and was ignored: ${item.error}\n${message.url}`);
@@ -393,12 +644,18 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('DISCORD_MEMBER_CHANNEL_ID is not set, so no member draw posts will be sent');
   }
+  console.log(QUEUE_ENABLED === 'true'
+    ? 'queue monitoring is ON, Walmart Droplist embeds will be collected'
+    : 'queue monitoring is OFF, set QUEUE_ENABLED=true to turn it on');
   console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
 });
 
 async function shutdown(signal) {
-  console.log(`${signal} received, flushing ${batcher.pending().length} pending run(s)`);
+  console.log(`${signal} received, flushing ${batcher.pending().length} draw and `
+    + `${queueBatcher.pending().length} queue run(s)`);
   batcher.flush();
+  queueBatcher.flush();
+  potentialBatcher.flush();
   setTimeout(async () => { await pool.end(); client.destroy(); process.exit(0); }, 2000);
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

@@ -12,12 +12,19 @@ import { recordBufferPost, markComplete } from './db.js';
  */
 export async function publishRun({
   runId, items, startsAt, endsAt, imageUrl, asDraft = true, liveSlots = new Set(),
+  // Set when a queue drop follows the draw on the same day, so the closing
+  // post hands the audience straight on to it.
+  overText = null,
 }) {
   const naming = await nameItems(items);
   const named = naming.items;
   const sets = setsOf(named);
 
   const posts = buildPosts({ items: named, sets, startsAt, endsAt });
+  if (overText) {
+    const over = posts.find((p) => p.slot === 'over');
+    if (over) over.text = overText;
+  }
   const altText = altTextFor({ items: named, startsAt });
 
   const report = { naming, sets, posts: [], wins: null, discord: discordPost({ items: named, sets, startsAt }) };

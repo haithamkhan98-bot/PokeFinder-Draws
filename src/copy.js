@@ -44,7 +44,7 @@ export const shortDate = (startsAt) => startsAt.setZone('America/New_York').toFo
  * A draw covering more than one set names them all, joined the way a person
  * would write them rather than with commas throughout.
  */
-const joinEnglish = (list) => {
+export const joinEnglish = (list) => {
   if (list.length <= 1) return list[0] ?? '';
   if (list.length === 2) return `${list[0]} and ${list[1]}`;
   return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;

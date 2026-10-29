@@ -179,3 +179,101 @@ export async function markDiscordFailed(id, message) {
     [id, String(message).slice(0, 500)],
   );
 }
+
+/** Write a fired queue run and its items. Mirrors saveRun for draws. */
+export async function saveQueueRun({ dropDate, dropsAt, items }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await client.query(
+      'SELECT id, status FROM queue_runs WHERE drop_date = $1 FOR UPDATE', [dropDate],
+    );
+    if (existing.rowCount && existing.rows[0].status !== 'collecting') {
+      await client.query('ROLLBACK');
+      return { runId: existing.rows[0].id, status: existing.rows[0].status, amend: true };
+    }
+    const run = await client.query(
+      `INSERT INTO queue_runs (drop_date, status, drops_at, fired_at)
+       VALUES ($1, 'fired', $2, now())
+       ON CONFLICT (drop_date) DO UPDATE
+         SET status = 'fired', drops_at = EXCLUDED.drops_at, fired_at = now()
+       RETURNING id`,
+      [dropDate, dropsAt],
+    );
+    const runId = run.rows[0].id;
+    for (const it of items) {
+      await client.query(
+        `INSERT INTO queue_items
+           (run_id, pid, raw_title, product_name, price_display, price_cents, image_url, classification)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (run_id, pid) DO UPDATE
+           SET raw_title = EXCLUDED.raw_title, product_name = EXCLUDED.product_name,
+               price_display = EXCLUDED.price_display, price_cents = EXCLUDED.price_cents,
+               image_url = EXCLUDED.image_url, classification = EXCLUDED.classification`,
+        [runId, it.pid, it.rawTitle, it.productName, it.priceDisplay,
+         it.priceCents, it.imageUrl, it.classification],
+      );
+    }
+    await client.query('COMMIT');
+    return { runId, status: 'fired', amend: false };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function setQueueRunResult(runId, { headline, imageUrl }) {
+  await pool.query(
+    'UPDATE queue_runs SET headline = COALESCE($2, headline), image_url = COALESCE($3, image_url) WHERE id = $1',
+    [runId, headline ?? null, imageUrl ?? null],
+  );
+}
+
+export async function recordQueuePost({ runId, slot, channelId, bufferPostId }) {
+  await pool.query(
+    `INSERT INTO queue_posts (run_id, slot, channel_id, buffer_post_id)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (run_id, slot, channel_id) DO UPDATE SET buffer_post_id = EXCLUDED.buffer_post_id`,
+    [runId, slot, channelId, bufferPostId],
+  );
+}
+
+/** The draw run's closing posts for a given date, if one exists and has not sent. */
+export async function drawOverPostsOn(date) {
+  const { rows } = await pool.query(
+    `SELECT bp.buffer_post_id, bp.channel_id
+       FROM buffer_posts bp
+       JOIN draw_runs dr ON dr.id = bp.run_id
+      WHERE dr.draw_date = $1 AND bp.slot = 'over'`,
+    [date],
+  );
+  return rows;
+}
+
+/** A fired queue run on a given date, with its items in stored order. */
+export async function queueRunOn(date) {
+  const { rows } = await pool.query(
+    'SELECT id, drops_at FROM queue_runs WHERE drop_date = $1 AND status <> $2', [date, 'collecting'],
+  );
+  if (!rows.length) return null;
+  const items = await pool.query(
+    `SELECT pid, raw_title, product_name, price_display, price_cents, classification
+       FROM queue_items WHERE run_id = $1 ORDER BY id`,
+    [rows[0].id],
+  );
+  return {
+    runId: rows[0].id,
+    dropsAt: rows[0].drops_at,
+    items: items.rows.map((r) => ({
+      pid: r.pid,
+      rawTitle: r.raw_title,
+      productName: r.product_name,
+      postName: r.product_name,
+      priceDisplay: r.price_display,
+      priceCents: r.price_cents,
+      classification: r.classification,
+    })),
+  };
+}

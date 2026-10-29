@@ -105,3 +105,49 @@ export async function createOnDrawChannels(opts, channels = DRAW_CHANNELS) {
   }
   return results;
 }
+
+/**
+ * Edit an existing post.
+ *
+ * Buffer documents the mutation as `editPost` taking an `EditPostInput`, but
+ * does not publish that input's field names. The id key is therefore tried
+ * both ways: `id` first, since the sibling deletePost is described as deleting
+ * "by id", then `postId`, which is what Buffer's own MCP tool calls it. A
+ * wrong field name comes back as a GraphQL validation error, so this costs one
+ * failed request the first time and nothing after that.
+ */
+let idKey = null;
+
+export async function editPost({ postId, text, imageUrl, altText }) {
+  const attempt = async (key) => {
+    const fields = [`${key}: ${JSON.stringify(postId)}`, `text: ${JSON.stringify(text)}`];
+    if (imageUrl) {
+      const meta = altText ? `, metadata: { altText: ${JSON.stringify(altText)} }` : '';
+      fields.push(`assets: [{ image: { url: ${JSON.stringify(imageUrl)}${meta} } }]`);
+    }
+    const data = await graphql(`mutation {
+      editPost(input: { ${fields.join(', ')} }) {
+        ... on PostActionSuccess { post { id status dueAt } }
+        ... on MutationError { message }
+      }
+    }`);
+    const result = data?.editPost;
+    if (!result) throw new Error('Buffer returned no result for editPost');
+    if (result.message) throw new Error(`Buffer rejected the edit: ${result.message}`);
+    if (!result.post?.id) throw new Error('Buffer edited the post but returned no id');
+    return result.post;
+  };
+
+  if (idKey) return attempt(idKey);
+
+  try {
+    const post = await attempt('id');
+    idKey = 'id';
+    return post;
+  } catch (err) {
+    if (!/unknown|not defined|no field|cannot query|unexpected/i.test(err.message)) throw err;
+    const post = await attempt('postId');
+    idKey = 'postId';
+    return post;
+  }
+}

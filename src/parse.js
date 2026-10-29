@@ -142,6 +142,41 @@ export function parsePrice(display) {
   return Number(m[1].replace(/,/g, '')) * 100 + Number((m[2] ?? '0').padEnd(2, '0'));
 }
 
+/** True for the second embed a monitor posts when an item actually opens. */
+/**
+ * Hosts that mean a link is already an affiliate link.
+ *
+ * The monitor can be configured to make each embed's title link an affiliate
+ * link. When it has been, that link arrives with the item and is better than
+ * anything reconstructed: it is current, it needs no lookup, and it cannot
+ * drift out of step with a spreadsheet.
+ */
+export const AFFILIATE_HOSTS = (process.env.AFFILIATE_HOSTS
+  || 'howl.link,mavely.app.link,go.magik.ly,shopmy.us')
+  .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+
+export function isAffiliateLink(url) {
+  try {
+    return AFFILIATE_HOSTS.some((h) => new URL(url).hostname.toLowerCase().endsWith(h));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The link to publish for an item.
+ *
+ * An affiliate link from the embed wins. Anything else falls back to the
+ * standard PokeFinder form built from the PID, which is what the link lists
+ * have always used when no affiliate link is known.
+ */
+export function resolveLink({ sourceUrl, pid }) {
+  if (sourceUrl && isAffiliateLink(sourceUrl)) return { link: sourceUrl, affiliate: true };
+  return { link: `https://www.walmart.com/ip/PokeFinder/${pid}`, affiliate: false };
+}
+
+export const isNowLive = (type) => /\bnow\s+live\b/i.test(String(type ?? ''));
+
 function fieldMap(embed) {
   const out = {};
   for (const f of embed?.fields ?? []) {
@@ -163,6 +198,12 @@ export function parseEmbed(embed, { now = DateTime.now() } = {}) {
   if (author !== DRAW_AUTHOR) return null;
 
   const f = fieldMap(embed);
+
+  // The monitor posts a second embed for the same product when the draw opens,
+  // marked "Raffle Now Live" and carrying no Time. Without this it looks like
+  // a draw embed that failed to parse, and every item produces a spurious
+  // alert at the moment the draw goes live.
+  if (isNowLive(f.type)) return null;
   const title = (embed?.title ?? '').trim();
   const pid = f.pid || f.sku;
   const priceDisplay = f.price;
@@ -184,6 +225,8 @@ export function parseEmbed(embed, { now = DateTime.now() } = {}) {
     priceDisplay,
     priceCents: parsePrice(priceDisplay),
     imageUrl: embed?.thumbnail?.url ?? embed?.image?.url ?? null,
+    sourceUrl: embed?.url ?? null,
+    ...resolveLink({ sourceUrl: embed?.url ?? null, pid: String(pid).replace(/[^0-9]/g, '') }),
     classification: classify(title),
     startsAt: win.start,
     endsAt: win.end,

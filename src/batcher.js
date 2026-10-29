@@ -17,6 +17,9 @@ export class Batcher {
     onFire,
     onLate,
     clock = Date.now,
+    // Draw items are grouped by their draw date; queue items by the drop they
+    // are queueing for. Everything else about the batching is identical.
+    keyOf = (item) => item.drawDate,
   } = {}) {
     this.quietMs = quietMs;
     this.ceilingMs = ceilingMs;
@@ -24,12 +27,13 @@ export class Batcher {
     this.onFire = onFire;
     this.onLate = onLate;
     this.clock = clock;
+    this.keyOf = keyOf;
     this.runs = new Map();   // drawDate -> { items: Map<pid,item>, firstSeen, quietTimer, ceilingTimer }
     this.fired = new Map();  // drawDate -> { firedAt, pids: Set }
   }
 
   add(item) {
-    const key = item.drawDate;
+    const key = this.keyOf(item);
     this.#prune();
 
     // A draw date that has already fired must never silently open a second run.

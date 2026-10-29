@@ -95,3 +95,45 @@ CREATE TABLE IF NOT EXISTS discord_posts (
 
 CREATE INDEX IF NOT EXISTS discord_posts_due_idx
   ON discord_posts(due_at) WHERE posted_at IS NULL;
+
+-- Walmart's collectibles queue, which drops at 9PM Eastern on Wednesdays.
+-- Kept apart from draw_runs because a queue run has no entry window, posts to
+-- one channel rather than two, and groups its items by game.
+CREATE TABLE IF NOT EXISTS queue_runs (
+  id           BIGSERIAL PRIMARY KEY,
+  drop_date    DATE        NOT NULL UNIQUE,
+  status       TEXT        NOT NULL DEFAULT 'collecting',
+  drops_at     TIMESTAMPTZ NOT NULL,
+  headline     TEXT,
+  image_url    TEXT,
+  error        TEXT,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  fired_at     TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS queue_items (
+  id            BIGSERIAL PRIMARY KEY,
+  run_id        BIGINT      NOT NULL REFERENCES queue_runs(id) ON DELETE CASCADE,
+  pid           TEXT        NOT NULL,
+  raw_title     TEXT        NOT NULL,
+  product_name  TEXT,
+  price_display TEXT,
+  price_cents   INTEGER,
+  image_url     TEXT,
+  classification TEXT       NOT NULL,
+  seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, pid)
+);
+
+CREATE TABLE IF NOT EXISTS queue_posts (
+  id             BIGSERIAL PRIMARY KEY,
+  run_id         BIGINT      NOT NULL REFERENCES queue_runs(id) ON DELETE CASCADE,
+  slot           TEXT        NOT NULL,
+  channel_id     TEXT        NOT NULL,
+  buffer_post_id TEXT        NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, slot, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS queue_items_run_idx ON queue_items(run_id);

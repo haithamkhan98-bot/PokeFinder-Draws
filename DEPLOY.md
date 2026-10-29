@@ -563,3 +563,71 @@ Product list names are shortened for these queue posts only. The whole rule:
 Nothing else is touched, so pack counts, variant names and set names all stay.
 The standard queue posts are unchanged: their group headings already carry the
 game, so their names are short already.
+
+### Fixes found by running a full sample queue
+
+Two live bugs, both caught by driving a realistic six item Wednesday drop
+through the whole pipeline rather than reasoning about it:
+
+- `classifyQueue` had no merchandise check, so "Pokemon Plush Pikachu 8in"
+  classified as Pokemon and would have been posted. It now runs the draw
+  path's own `NOT_CARDS` list, imported rather than copied, before the game
+  patterns. The queue and the draws can no longer disagree about what a card
+  is.
+- `cleanTitle` only knew the singular "Pokemon Trading Card Game", so a title
+  reading "Pokemon Trading Card Games 30th Celebration" came out as
+  "s 30th Celebration". Walmart uses both spellings. This one also affected
+  draw posts whenever the naming step fell back to the local list.
+
+The queue headline fallback now uses the same summary rule as the late queue
+draft: Pokemon by set, every other game by name, sports by line. The old
+fallback named each group's lead product in full and produced headlines over a
+hundred characters long.
+
+### The queue schedule
+
+Three tweets, all to CollectFinder:
+
+| slot | when |
+| --- | --- |
+| announcement | immediately, published |
+| fifteen_minutes | 8:45PM on drop day |
+| going_live | 8:59PM on drop day |
+
+There is no 9AM reminder. A queue drop is announced the night before and
+reminded twice on the night itself.
+
+The same day handoff is a fourth post and works whichever run fires first.
+Draw first: the queue run rewrites the draw's already scheduled 6PM closing
+post in place, keeping its image. Queue first: the draw run looks up the day's
+queue run and builds that closing post with the queue wording from the start.
+Either way the 6PM post reads:
+
+```
+💫 Today's Walmart Draw is Now Over! Next we have a Walmart Queue drop at 9PM EST / 6PM PST!
+```
+
+### Going live on queues, in two steps
+
+The queue has its own flag, separate from the draws'. `BUFFER_LIVE` is the
+draws' and is already on; it has no effect on queue posts.
+
+| | |
+| --- | --- |
+| `QUEUE_ENABLED=true` | collect Droplist embeds and produce a run |
+| `QUEUE_LIVE=true` | and post it for real |
+
+With `QUEUE_ENABLED=true` alone, a run produces everything it normally would
+and sends it to Buffer as drafts: the announcement as a draft with no time, the
+two reminders as drafts carrying their intended send times. Nothing sends.
+
+The one thing a dry run deliberately skips is the same day handoff, in both
+directions. The draw's 6PM closing post is already scheduled and real, so a
+dry run does not rewrite it, and a draw firing while the queue is in drafts
+does not pick up the queue wording either. The alert prints the text the
+handoff would have written so it can be checked.
+
+The late "Potential WM Droplist" draft is unaffected: it is always a draft,
+whatever these flags say.
+
+Boot logs which mode it is in: `queue monitoring is ON, posting to DRAFTS only`.

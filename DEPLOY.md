@@ -703,6 +703,19 @@ roughly eight products fit in the full form, beyond that it drops to one line
 per product, and past that to names only. A test drives 30 products through it
 and asserts every name still appears.
 
+### Checking it without waiting for a summary
+
+`!bbpreview` in the alert channel. With no argument it builds the digest from
+whatever the monitor has actually banked for the next 7AM slot, which is the
+real thing rather than a mock. With no summary banked, or with a number
+(`!bbpreview 5`), it uses stand in products so the formatting can still be
+checked.
+
+The preview replies with the slot it would post into, the product count, the
+character count and which form it used, then prints the digest itself. Mentions
+are suppressed on that message, so the role pill is visible but nobody is
+pinged, and nothing is written to the run or sent to `#instore-alerts`.
+
 ### Not included
 
 `src/reddit-copy.js` and its tests ship with this but nothing imports them. That

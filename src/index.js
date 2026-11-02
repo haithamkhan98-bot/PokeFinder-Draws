@@ -20,8 +20,9 @@ import { buildPosts, winsPost, discordPost, buildDiscordPosts } from './copy.js'
 import { startDiscordScheduler } from './discord-schedule.js';
 import { scheduleDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
-import { parseSummaryEmbed, SUMMARY_AUTHOR } from './bestbuy.js';
-import { recordBestbuyItem } from './db.js';
+import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates } from './bestbuy.js';
+import { bestbuyDigest } from './bestbuy-copy.js';
+import { recordBestbuyItem, pendingBestbuyRun } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 
 const {
@@ -576,6 +577,92 @@ async function queuePreview(message, raw) {
   }
 }
 
+/**
+ * `!bbpreview` shows the digest without sending anything to members.
+ *
+ * With no argument it uses whatever the monitor has actually banked for the
+ * next 7AM slot, which is the real thing. With a number it falls back to
+ * stand in products so the formatting can be checked on a night when no
+ * summary has arrived.
+ *
+ * Mentions are suppressed on the reply, so the role pill is visible in the
+ * preview but nobody is pinged by it.
+ */
+async function bestbuyPreview(message, raw) {
+  const role = DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+';
+  const checkerChannel = BESTBUY_CHECKER_CHANNEL_ID
+    ? `<#${BESTBUY_CHECKER_CHANNEL_ID}>` : '#bestbuy-instore-check';
+
+  const STAND_IN = [
+    ['Pokémon - Trading Card Game: 30th Celebration Elite Trainer Box', '$49.99',
+      'California [536]\nIllinois [326]\nOhio [175]', 'Texas [460]\nNew Jersey [227]\nFlorida [67]'],
+    ['Pokémon - Trading Card Game: Scarlet & Violet Destined Rivals Elite Trainer Box', '$49.99',
+      'California [242]\nFlorida [79]\nMaine [8]', 'Texas [102]\nNew Jersey [65]\nOhio [60]'],
+    ['Pokémon - Trading Card Game: 30th Celebration Poster Collection', '$14.99',
+      'California [482]\nIllinois [291]', 'Texas [342]\nOhio [227]'],
+    ['2026 Topps Bowman Chrome Football Trading Cards Value Box', '$29.97',
+      'Texas [120]\nArizona [40]', 'California [95]\nNew York [30]'],
+    ['Pokemon Pikachu Plush 8in', '$14.97', 'California [50]', 'Texas [40]'],
+  ];
+
+  try {
+    let items;
+    let source;
+    const n = parseInt(raw, 10);
+
+    if (!n) {
+      const run = await pendingBestbuyRun();
+      if (run?.items?.length) {
+        items = run.items;
+        source = `the ${run.items.length} item(s) banked for ${run.post_date}`;
+      }
+    }
+
+    if (!items) {
+      const take = Math.min(Math.max(n || 4, 1), STAND_IN.length);
+      items = STAND_IN.slice(0, take).map(([rawTitle, priceDisplay, a, b], i) => {
+        const { stock } = parseStates(a, b);
+        return {
+          sku: `preview-${i + 1}`,
+          rawTitle,
+          priceDisplay,
+          units: Object.values(stock).reduce((x, y) => x + y, 0),
+          states: Object.keys(stock).length,
+          stock,
+          regions: byRegion(stock),
+          merch: /plush/i.test(rawTitle),
+        };
+      });
+      source = `${items.length} stand in product(s), because nothing is banked`;
+    }
+
+    const digest = bestbuyDigest({ items, role, checkerChannel });
+    const postAt = nextPostAt(DateTime.now());
+
+    if (!digest) {
+      await message.reply(`Dry run from ${source}. Nothing postable, so no digest would be sent.`);
+      return;
+    }
+
+    const dropped = items.length - digest.items.length;
+    await message.reply(
+      `Dry run from ${source}. Nothing sent to members.\n`
+      + `Would post ${postAt.toFormat('ccc LLL d, h:mma ZZZZ')} to `
+      + `${BESTBUY_ALERT_CHANNEL_ID ? `<#${BESTBUY_ALERT_CHANNEL_ID}>` : 'the instore alerts channel'}.\n`
+      + `${digest.items.length} product(s)`
+      + (dropped ? `, ${dropped} filtered as merchandise` : '')
+      + `, ${digest.text.length} chars, ${digest.form} form.`,
+    );
+    await message.channel.send({
+      content: digest.text.slice(0, 1990),
+      // The preview must never ping the role.
+      allowedMentions: { parse: [] },
+    });
+  } catch (err) {
+    await message.reply(`BestBuy preview failed: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   // The command branch only. The bot check must NOT cover the monitor channel:
   // the Walmart monitor posts as a bot, so filtering bots there would make the
@@ -592,6 +679,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     const qpreview = content.match(/^!queuepreview(?:\s+(\d+))?$/i);
     if (qpreview) { await queuePreview(message, qpreview[1]); return; }
+
+    const bb = content.match(/^!bbpreview(?:\s+(\d+))?$/i);
+    if (bb) { await bestbuyPreview(message, bb[1]); return; }
 
     return;
   }

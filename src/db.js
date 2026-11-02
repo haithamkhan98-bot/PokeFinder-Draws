@@ -355,3 +355,19 @@ export async function markBestbuyFailed(id, message) {
     [id, String(message).slice(0, 500)],
   );
 }
+
+/** The next unposted BestBuy run and its items, due or not. For previews. */
+export async function pendingBestbuyRun() {
+  const { rows } = await pool.query(
+    `SELECT id, post_date, post_at FROM bestbuy_runs
+      WHERE posted_at IS NULL ORDER BY post_at LIMIT 1`,
+  );
+  if (!rows.length) return null;
+  const items = await pool.query(
+    `SELECT sku, raw_title AS "rawTitle", price_display AS "priceDisplay", link,
+            image_url AS "imageUrl", units, states, stock, regions, merch
+       FROM bestbuy_items WHERE run_id = $1 ORDER BY units DESC`,
+    [rows[0].id],
+  );
+  return { ...rows[0], items: items.rows };
+}

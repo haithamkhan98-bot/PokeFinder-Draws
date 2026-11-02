@@ -127,3 +127,33 @@ test('an oversized digest drops detail, never products', () => {
   assert.equal(d.items.length, 30);
   for (const i of many) assert.ok(d.text.includes(shortTitle(i.rawTitle)), `${i.rawTitle} fell off`);
 });
+
+// Daily Summaries carry sports cards too. They should read like the Pokemon
+// ones, not keep BestBuy's "Trading Cards" filler.
+test('non Pokemon titles shorten too', () => {
+  assert.equal(shortTitle('2026 Topps Bowman Chrome Football Trading Cards Value Box'),
+    '2026 Topps Bowman Chrome Football Value Box');
+  assert.equal(shortTitle('One Piece Card Game OP-11 Booster Box'),
+    'One Piece OP-11 Booster Box');
+});
+
+// The preview must be able to render a mixed night without the role pinging.
+test('a mixed night renders with merchandise filtered out', () => {
+  const mk = (rawTitle, stock, merch = false) => ({
+    rawTitle, priceDisplay: '$49.99', stock,
+    units: Object.values(stock).reduce((a, b) => a + b, 0),
+    states: Object.keys(stock).length, regions: byRegion(stock), merch,
+  });
+  const d = bestbuyDigest({
+    items: [
+      mk('Pokémon - Trading Card Game: 30th Celebration Elite Trainer Box', { CA: 536, TX: 460 }),
+      mk('2026 Topps Bowman Chrome Football Trading Cards Value Box', { TX: 120, AZ: 40 }),
+      mk('Pokemon Pikachu Plush 8in', { CA: 50 }, true),
+    ],
+    role: '<@&1>', checkerChannel: '<#2>',
+  });
+  assert.equal(d.items.length, 2);
+  assert.ok(!d.text.includes('Plush'));
+  assert.ok(d.text.includes('2026 Topps Bowman Chrome Football Value Box'));
+  assert.ok(d.text.includes('<@&1>') && d.text.includes('<#2>'));
+});

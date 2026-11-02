@@ -6,6 +6,7 @@
  */
 import { shortenQueueName } from './queue-copy.js';
 import { joinEnglish } from './copy.js';
+import { classifyQueue, GROUP_ORDER } from './queue.js';
 
 export const DISCORD_LIMIT = 2000;
 
@@ -16,6 +17,9 @@ export function shortTitle(raw) {
   t = t.replace(/\bScarlet\s*&\s*Violet\s*/i, '');
   t = t.replace(/\s*\(\s*1\s*Ex Box per Order\s*\)\s*/i, ' ');
   t = t.replace(/\s*[-–—]\s*Styles May Vary\s*$/i, '');
+  // BestBuy writes variant bundles as "Sylveon ex Box or Greninja ex Box".
+  // A slash reads better in a post than the word.
+  t = t.replace(/\s+or\s+/gi, ' / ');
   return shortenQueueName(t);
 }
 
@@ -48,19 +52,29 @@ function compactBlock(i) {
  *
  * `role` and `checkerChannel` are the mention strings. Discord only pings
  * when it is given <@&id>, and only renders a channel link from <#id>.
- * Products are ordered by units, so the biggest restock leads.
+ *
+ * Ordering follows the rest of the bot: Pokemon, then One Piece, Magic,
+ * sports and anything else, with the biggest restock leading inside each
+ * group. `classifyQueue` does the sorting and the excluding, so BestBuy can
+ * never disagree with the draws and the queues about what a Pokemon product
+ * is or what counts as merchandise.
  */
 export function bestbuyDigest({ items, role, checkerChannel }) {
+  const rank = (i) => {
+    const idx = GROUP_ORDER.indexOf(classifyQueue(i.rawTitle));
+    return idx === -1 ? GROUP_ORDER.length : idx;
+  };
+
   const usable = items
-    .filter((i) => !i.merch)
-    .map((i) => ({ ...i, name: shortTitle(i.rawTitle) }))
-    .sort((a, b) => b.units - a.units);
+    .map((i) => ({ ...i, name: shortTitle(i.rawTitle), group: classifyQueue(i.rawTitle) }))
+    .filter((i) => i.group !== 'excluded' && !i.merch)
+    .sort((a, b) => rank(a) - rank(b) || b.units - a.units);
 
   if (!usable.length) return null;
 
   const head = '# BestBuy Instore Drops';
-  const intro = `${role} ${joinEnglish(usable.map((i) => i.name))} are dropping at BestBuy locations this week!`;
-  const tail = `Be sure to use the BestBuy stock checker in ${checkerChannel} to see which locations by you are restocking!`;
+  const intro = `${role} ${joinEnglish(usable.map((i) => `**${i.name}**`))} are dropping at BestBuy locations this week!`;
+  const tail = `Be sure to use the BestBuy stock checker in ${checkerChannel} every morning to see when locations by you are restocking!`;
 
   const build = (blocks) => [head, intro, ...blocks, tail].join('\n\n');
 

@@ -689,10 +689,20 @@ you get an alert saying it missed the post.
 
 ### What the digest contains
 
-Products are ordered by units so the biggest restock leads. Each gets its name,
-price, total units, state count and units per region, biggest region first.
-Merchandise is filtered using the same `NOT_CARDS` list as the draws, so a plush
-never appears. Everything else the monitor reports is included.
+Products follow the same priority as the draws and the queues: Pokemon first,
+then One Piece, Magic, sports and anything else, with the biggest restock
+leading inside each group. Ordering and filtering both come from
+`classifyQueue`, so BestBuy can never disagree with the rest of the bot about
+what a Pokemon product is or what counts as merchandise. Merchandise and the
+Upper Deck and college exclusions are dropped; everything else is included.
+
+Each product gets its name, price, total units, state count and units per
+region, biggest region first. The opening line bolds every product name.
+
+Titles shorten the way the queue posts shorten theirs, with two BestBuy
+additions: the "Pokemon - Trading Card Game:" prefix and the "(1 Ex Box per
+Order) - Styles May Vary" suffix come off, and a variant bundle written
+"Sylveon ex Box or Greninja ex Box" becomes "Sylveon ex Box / Greninja ex Box".
 
 Region mapping lives in `REGIONS` in `src/bestbuy.js`. A state the monitor names
 that is not in the map has its units left out of the regional totals, and you

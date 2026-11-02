@@ -86,20 +86,51 @@ test('BestBuy titles shorten to how a collector writes them', () => {
   assert.equal(shortTitle('Pokémon - Trading Card Game: 30th Celebration Elite Trainer Box'),
     '30th Celebration ETB');
   assert.equal(shortTitle('Pokémon - Trading Card Game: 30th Celebration Sylveon ex Box or Greninja ex Box (1 Ex Box per Order) - Styles May Vary'),
-    '30th Celebration Sylveon ex Box or Greninja ex Box');
+    '30th Celebration Sylveon ex Box / Greninja ex Box');
 });
 
 const item = (rawTitle, units, regions, extra = {}) =>
   ({ rawTitle, units, states: 40, regions, priceDisplay: '$49.99', merch: false, ...extra });
 
-test('products are ordered by units, biggest restock first', () => {
+// Same priority as the draws and the queues: Pokemon leads whatever the
+// numbers say, then One Piece, Magic, sports, everything else.
+test('Pokemon leads even when another game has far more units', () => {
   const d = bestbuyDigest({
-    items: [item('Small Thing', 100, { West: 100 }), item('Big Thing', 900, { West: 900 })],
+    items: [
+      item('2026 Topps Bowman Chrome Football Value Box', 9000, { West: 9000 }),
+      item('One Piece Card Game OP-11 Booster Box', 5000, { West: 5000 }),
+      item('Pokemon TCG 30th Celebration Elite Trainer Box', 100, { West: 100 }),
+    ],
     role: '<@&1>', checkerChannel: '<#2>',
   });
-  assert.ok(d.text.indexOf('Big Thing') < d.text.indexOf('Small Thing'));
+  const at = (s) => d.text.indexOf(s);
+  assert.ok(at('30th Celebration ETB') < at('One Piece OP-11 Booster Box'));
+  assert.ok(at('One Piece OP-11 Booster Box') < at('Topps Bowman Chrome Football Value Box'));
+});
+
+test('inside a group the biggest restock leads', () => {
+  const d = bestbuyDigest({
+    items: [
+      item('Pokemon TCG Small Set Elite Trainer Box', 100, { West: 100 }),
+      item('Pokemon TCG Big Set Elite Trainer Box', 900, { West: 900 }),
+    ],
+    role: '<@&1>', checkerChannel: '<#2>',
+  });
+  assert.ok(d.text.indexOf('Big Set ETB') < d.text.indexOf('Small Set ETB'));
   assert.ok(d.text.startsWith('# BestBuy Instore Drops'));
-  assert.ok(d.text.endsWith('restocking!'));
+  assert.ok(d.text.endsWith('every morning to see when locations by you are restocking!'));
+});
+
+test('the opening line bolds every product name', () => {
+  const d = bestbuyDigest({
+    items: [item('Pokemon TCG 30th Celebration Elite Trainer Box', 900, { West: 900 }),
+      item('Pokemon TCG Prismatic Evolutions Booster Bundle', 100, { West: 100 })],
+    role: '<@&1>', checkerChannel: '<#2>',
+  });
+  const intro = d.text.split('\n\n')[1];
+  assert.ok(intro.includes('**30th Celebration ETB**'));
+  assert.ok(intro.includes('**Prismatic Evolutions Booster Bundle**'));
+  assert.ok(intro.endsWith('are dropping at BestBuy locations this week!'));
 });
 
 test('merchandise is left out of the digest', () => {
@@ -155,5 +186,16 @@ test('a mixed night renders with merchandise filtered out', () => {
   assert.equal(d.items.length, 2);
   assert.ok(!d.text.includes('Plush'));
   assert.ok(d.text.includes('2026 Topps Bowman Chrome Football Value Box'));
+  // Pokemon ahead of the sports box, not the other way round.
+  assert.ok(d.text.indexOf('30th Celebration ETB') < d.text.indexOf('Topps Bowman'));
   assert.ok(d.text.includes('<@&1>') && d.text.includes('<#2>'));
+});
+
+// BestBuy writes variant bundles with the word "or", which reads oddly in a post.
+test('variant bundles join with a slash, not the word or', () => {
+  assert.equal(
+    shortTitle('Pokémon - Trading Card Game: 30th Celebration Sylveon ex Box or Greninja ex Box (1 Ex Box per Order) - Styles May Vary'),
+    '30th Celebration Sylveon ex Box / Greninja ex Box');
+  // A word merely containing the letters is untouched.
+  assert.equal(shortTitle('Pokémon - Trading Card Game: Explorer Booster Box'), 'Explorer Booster Box');
 });

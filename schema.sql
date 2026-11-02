@@ -137,3 +137,43 @@ CREATE TABLE IF NOT EXISTS queue_posts (
 );
 
 CREATE INDEX IF NOT EXISTS queue_items_run_idx ON queue_items(run_id);
+
+-- BestBuy in store Daily Summaries.
+--
+-- Unlike draws and queues nothing publishes immediately: embeds arrive around
+-- 1AM and the digest goes out at 7AM. A run is therefore a collection bucket
+-- keyed on the morning it will be posted, and stays open until the ticker
+-- picks it up. A straggler at 3AM joins the same run.
+CREATE TABLE IF NOT EXISTS bestbuy_runs (
+  id          BIGSERIAL PRIMARY KEY,
+  post_date   DATE        NOT NULL UNIQUE,
+  post_at     TIMESTAMPTZ NOT NULL,
+  body        TEXT,
+  form        TEXT,
+  posted_at   TIMESTAMPTZ,
+  message_id  TEXT,
+  error       TEXT,
+  attempts    INTEGER     NOT NULL DEFAULT 0,
+  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS bestbuy_items (
+  id            BIGSERIAL PRIMARY KEY,
+  run_id        BIGINT      NOT NULL REFERENCES bestbuy_runs(id) ON DELETE CASCADE,
+  sku           TEXT        NOT NULL,
+  raw_title     TEXT        NOT NULL,
+  price_display TEXT,
+  link          TEXT,
+  image_url     TEXT,
+  units         INTEGER     NOT NULL,
+  states        INTEGER     NOT NULL,
+  stock         JSONB       NOT NULL,
+  regions       JSONB       NOT NULL,
+  merch         BOOLEAN     NOT NULL DEFAULT false,
+  seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, sku)
+);
+
+CREATE INDEX IF NOT EXISTS bestbuy_items_run_idx ON bestbuy_items(run_id);
+CREATE INDEX IF NOT EXISTS bestbuy_runs_due_idx
+  ON bestbuy_runs(post_at) WHERE posted_at IS NULL;

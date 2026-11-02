@@ -652,3 +652,58 @@ runs longer than an hour still gets its reminder in the last ten minutes.
 
 The tweet schedule is untouched: 9AM morning, 10 minutes out, 4:59PM go live,
 30 minutes left.
+
+## BestBuy in store digests
+
+The monitor posts a "Daily Summary" embed per product in
+`#bestbuy-instore-monitor`, usually around 1AM and not every day. The bot banks
+them and posts one digest to `#instore-alerts` at 7AM.
+
+### Variables
+
+```
+BESTBUY_CHANNEL_ID=1488227877248962562          read the summaries from here
+BESTBUY_ALERT_CHANNEL_ID=1338323559486980127    post the digest here
+BESTBUY_CHECKER_CHANNEL_ID=1386868205783482459  linked in the closing line
+BESTBUY_ENABLED=true                            collect and build
+BESTBUY_LIVE=true                               and actually post it
+```
+
+`BESTBUY_POST_HOUR` overrides the 7AM slot if you ever want it earlier or
+later. The role ping reuses `DISCORD_MEMBER_ROLE_ID`.
+
+Two step rollout, the same as queues. With `BESTBUY_ENABLED=true` alone the bot
+collects the embeds, builds the digest at 7AM and prints the whole thing to the
+alert channel without sending anything to members. Add `BESTBUY_LIVE=true` once
+it reads right.
+
+### How the timing works
+
+A run is a collection bucket keyed on the morning it will post, which is the
+next 7AM Eastern that has not passed. Embeds at 1:10AM and at 3:40AM share one
+key and one digest, so a straggler joins the post rather than causing a second
+one. Nothing closes early, because nothing here is a race.
+
+If an embed arrives after the digest has already gone out, it is recorded and
+you get an alert saying it missed the post.
+
+### What the digest contains
+
+Products are ordered by units so the biggest restock leads. Each gets its name,
+price, total units, state count and units per region, biggest region first.
+Merchandise is filtered using the same `NOT_CARDS` list as the draws, so a plush
+never appears. Everything else the monitor reports is included.
+
+Region mapping lives in `REGIONS` in `src/bestbuy.js`. A state the monitor names
+that is not in the map has its units left out of the regional totals, and you
+get an alert naming it, so the numbers can never quietly stop adding up.
+
+Discord's 2,000 character limit is handled by degrading, never by truncating:
+roughly eight products fit in the full form, beyond that it drops to one line
+per product, and past that to names only. A test drives 30 products through it
+and asserts every name still appears.
+
+### Not included
+
+`src/reddit-copy.js` and its tests ship with this but nothing imports them. That
+is the Reddit work in progress and it is inert until the posting layer is built.

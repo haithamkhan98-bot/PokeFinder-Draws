@@ -277,3 +277,81 @@ export async function queueRunOn(date) {
     })),
   };
 }
+
+/**
+ * Record one BestBuy Daily Summary item against the morning it will post in.
+ *
+ * The monitor sometimes repeats a product. An existing SKU in the same run is
+ * updated rather than duplicated, so the last numbers seen are the ones used.
+ */
+export async function recordBestbuyItem({ postDate, postAt, item }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const run = await client.query(
+      `INSERT INTO bestbuy_runs (post_date, post_at) VALUES ($1, $2)
+       ON CONFLICT (post_date) DO UPDATE SET post_date = EXCLUDED.post_date
+       RETURNING id, posted_at`,
+      [postDate, postAt],
+    );
+    const { id: runId, posted_at: postedAt } = run.rows[0];
+    const { rows } = await client.query(
+      `INSERT INTO bestbuy_items
+         (run_id, sku, raw_title, price_display, link, image_url, units, states, stock, regions, merch)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (run_id, sku) DO UPDATE SET
+         raw_title = EXCLUDED.raw_title, price_display = EXCLUDED.price_display,
+         link = EXCLUDED.link, image_url = EXCLUDED.image_url, units = EXCLUDED.units,
+         states = EXCLUDED.states, stock = EXCLUDED.stock, regions = EXCLUDED.regions,
+         merch = EXCLUDED.merch, seen_at = now()
+       RETURNING (xmax = 0) AS inserted`,
+      [runId, item.sku, item.rawTitle, item.priceDisplay, item.link, item.imageUrl,
+        item.units, item.states, JSON.stringify(item.stock), JSON.stringify(item.regions), item.merch],
+    );
+    await client.query('COMMIT');
+    // `late` means the digest for this morning has already gone out.
+    return { runId, inserted: rows[0].inserted, late: Boolean(postedAt) };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** The run whose 7AM slot has come round, with its items. */
+export async function claimDueBestbuyRun() {
+  const { rows } = await pool.query(
+    `SELECT id, post_date, post_at, attempts
+       FROM bestbuy_runs
+      WHERE posted_at IS NULL AND post_at <= now() AND attempts < 5
+      ORDER BY post_at
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED`,
+  );
+  if (!rows.length) return null;
+  const run = rows[0];
+  const items = await pool.query(
+    `SELECT sku, raw_title AS "rawTitle", price_display AS "priceDisplay", link,
+            image_url AS "imageUrl", units, states, stock, regions, merch
+       FROM bestbuy_items WHERE run_id = $1 ORDER BY units DESC`,
+    [run.id],
+  );
+  return { ...run, items: items.rows };
+}
+
+export async function markBestbuyPosted(id, { messageId, body, form }) {
+  await pool.query(
+    `UPDATE bestbuy_runs
+        SET posted_at = now(), message_id = $2, body = $3, form = $4, error = NULL
+      WHERE id = $1`,
+    [id, messageId, body, form],
+  );
+}
+
+export async function markBestbuyFailed(id, message) {
+  await pool.query(
+    'UPDATE bestbuy_runs SET attempts = attempts + 1, error = $2 WHERE id = $1',
+    [id, String(message).slice(0, 500)],
+  );
+}

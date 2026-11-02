@@ -20,6 +20,9 @@ import { buildPosts, winsPost, discordPost, buildDiscordPosts } from './copy.js'
 import { startDiscordScheduler } from './discord-schedule.js';
 import { scheduleDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
+import { parseSummaryEmbed, SUMMARY_AUTHOR } from './bestbuy.js';
+import { recordBestbuyItem } from './db.js';
+import { startBestbuyScheduler } from './bestbuy-schedule.js';
 
 const {
   DISCORD_TOKEN,
@@ -31,6 +34,11 @@ const {
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
   QUEUE_LIVE,
+  BESTBUY_CHANNEL_ID,
+  BESTBUY_ALERT_CHANNEL_ID,
+  BESTBUY_CHECKER_CHANNEL_ID,
+  BESTBUY_ENABLED,
+  BESTBUY_LIVE,
 } = process.env;
 
 // Discord only pings when given the role ID. The literal text "@PokeFinder+"
@@ -588,6 +596,49 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
+  // BestBuy in store Daily Summaries. These land around 1AM in their own
+  // channel and publish at 7AM, so nothing happens here beyond banking them
+  // against the morning they belong to.
+  if (BESTBUY_CHANNEL_ID && message.channelId === BESTBUY_CHANNEL_ID) {
+    if (BESTBUY_ENABLED !== 'true') return;
+    for (const embed of message.embeds ?? []) {
+      let item;
+      try {
+        item = parseSummaryEmbed(embed, { now: DateTime.now() });
+      } catch (err) {
+        await alert(`Could not parse a BestBuy summary embed from ${message.url}: ${err.message}`);
+        continue;
+      }
+      if (item === null) continue;
+      if (item.error) {
+        await alert(`A "${SUMMARY_AUTHOR}" embed could not be read and was ignored: ${item.error}\n${message.url}`);
+        continue;
+      }
+      try {
+        const res = await recordBestbuyItem({ postDate: item.postDate, postAt: item.postAt.toISO(), item });
+        console.log(
+          `${res.inserted ? 'added' : 'updated'} bestbuy ${item.sku} ${item.rawTitle} `
+          + `(${item.units} units, ${item.states} states) -> digest ${item.postDate}`,
+        );
+        if (res.late) {
+          await alert(
+            `**Late BestBuy summary for ${item.postDate}**\n`
+            + `${item.rawTitle} (${item.sku}) arrived after the digest had gone out, so it is not in it.`,
+          );
+        }
+        if (item.unknownStates.length) {
+          await alert(
+            `BestBuy summary for ${item.rawTitle} listed states with no region mapping, `
+            + `so their units are missing from the totals: ${item.unknownStates.join(', ')}`,
+          );
+        }
+      } catch (err) {
+        await alert(`Could not record a BestBuy summary item: ${err.message}`);
+      }
+    }
+    return;
+  }
+
   if (message.channelId !== WALMART_CHANNEL_ID) return;
   if (!message.embeds?.length) return;
 
@@ -659,6 +710,34 @@ client.once(Events.ClientReady, (c) => {
   console.log(QUEUE_ENABLED === 'true'
     ? `queue monitoring is ON, posting ${QUEUE_LIVE === 'true' ? 'LIVE' : 'to DRAFTS only'}`
     : 'queue monitoring is OFF, set QUEUE_ENABLED=true to turn it on');
+
+  if (BESTBUY_ENABLED === 'true' && BESTBUY_CHANNEL_ID && BESTBUY_ALERT_CHANNEL_ID) {
+    startBestbuyScheduler(client, {
+      channelId: BESTBUY_ALERT_CHANNEL_ID,
+      role: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
+      checkerChannel: BESTBUY_CHECKER_CHANNEL_ID
+        ? `<#${BESTBUY_CHECKER_CHANNEL_ID}>` : '#bestbuy-instore-check',
+      live: BESTBUY_LIVE === 'true',
+      onError: alert,
+      onPosted: async ({ run, digest, dryRun, skipped }) => {
+        if (skipped) {
+          await alert(`BestBuy digest for ${run.post_date}: ${skipped}, nothing sent.`);
+          return;
+        }
+        const names = digest.items.map((i) => i.name).join(', ');
+        await alert(
+          `**BestBuy digest ${dryRun ? 'BUILT (dry run, nothing sent)' : 'posted'}** ${run.post_date}\n`
+          + `${digest.items.length} product(s), ${digest.text.length} chars, ${digest.form} form\n`
+          + `${names}`
+          + (dryRun ? `\n\n${digest.text}` : ''),
+        );
+      },
+    });
+    console.log(`bestbuy digests are ON, reading ${BESTBUY_CHANNEL_ID}, posting `
+      + `${BESTBUY_LIVE === 'true' ? 'LIVE' : 'as a DRY RUN'} to ${BESTBUY_ALERT_CHANNEL_ID}`);
+  } else {
+    console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
+  }
   console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
 });
 

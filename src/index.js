@@ -16,9 +16,9 @@ import { buildQueuePosts, linkList, drawOverWithQueue } from './queue-copy.js';
 import { buildGrid } from './grid.js';
 import { queueHeadline } from './naming.js';
 import { nextDropAt } from './queue.js';
-import { buildPosts, winsPost, discordPost, buildDiscordPosts } from './copy.js';
+import { buildPosts, winsPost, buildDiscordPosts, itemBlock, orderedPokemon, orderedItems } from './copy.js';
 import { startDiscordScheduler } from './discord-schedule.js';
-import { scheduleDiscordPost } from './db.js';
+import { scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
 import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
@@ -63,6 +63,55 @@ async function alert(text) {
     await ch?.send(text.slice(0, 1900));
   } catch (err) {
     console.error('could not post alert:', err.message);
+  }
+}
+
+/**
+ * Post text to the alert channel inside a code fence, so it can be lifted out
+ * of Discord by copying rather than retyped.
+ *
+ * A fence leaves `<@&id>` and `<#id>` as the literal text a paste needs, which
+ * is also why a copy block can never ping anybody: nothing in it renders.
+ *
+ * Discord caps a message at 2000 characters and the fence itself costs eight,
+ * so a long body is split on line boundaries rather than cut off. Half an
+ * announcement is no use to paste.
+ */
+async function alertBlock(label, text) {
+  const body = String(text ?? '');
+  if (!ALERT_CHANNEL_ID) { console.warn(`${label}:\n${body}`); return; }
+
+  const LIMIT = 1900;
+  const chunks = [];
+  let current = '';
+  for (const line of body.split('\n')) {
+    let rest = line;
+    do {
+      // A single line longer than the limit has no boundary to split on, so
+      // it is cut. Nothing in these posts is that long; this is a guard.
+      const piece = rest.slice(0, LIMIT);
+      rest = rest.slice(LIMIT);
+      if (current && current.length + piece.length + 1 > LIMIT) {
+        chunks.push(current);
+        current = '';
+      }
+      current = current ? `${current}\n${piece}` : piece;
+    } while (rest.length);
+  }
+  if (current) chunks.push(current);
+
+  try {
+    const ch = await client.channels.fetch(ALERT_CHANNEL_ID);
+    for (const [idx, chunk] of chunks.entries()) {
+      const heading = chunks.length > 1 ? `${label} (${idx + 1}/${chunks.length})` : label;
+      await ch?.send({
+        content: `${heading}:\n\`\`\`\n${chunk}\n\`\`\``,
+        // Belt and braces. The fence already stops any of it rendering.
+        allowedMentions: { parse: [] },
+      });
+    }
+  } catch (err) {
+    console.error('could not post copy block:', err.message);
   }
 }
 
@@ -139,6 +188,14 @@ const batcher = new Batcher({
       let drawImageError = null;
       const failedPhotos = images.filter((e) => e.error);
 
+      // Naming runs here rather than inside publishRun, because the graphic is
+      // built first and the set names are what the ordering depends on.
+      // Without this the grid came out in monitor arrival order while the
+      // written list was sorted, so the two disagreed.
+      const drawNaming = await nameItems(usable);
+      const drawOrdered = orderedItems(drawNaming.items);
+      const photoByPid = new Map(images.map((e) => [e.item.pid, e]));
+
       if (failedPhotos.length) {
         drawImageError = `${failedPhotos.length} of ${usable.length} product photo(s) could not be fetched`;
       } else {
@@ -147,7 +204,7 @@ const batcher = new Batcher({
             runId: res.runId,
             drawDate,
             startsAt: usable[0].startsAt,
-            items: images.map((e) => ({ ...e.item, buffer: e.buffer })),
+            items: drawOrdered.map((i) => ({ ...i, buffer: photoByPid.get(i.pid)?.buffer })),
           });
         } catch (err) {
           drawImageError = err.message;
@@ -181,6 +238,7 @@ const batcher = new Batcher({
           publish = await publishRun({
             runId: res.runId,
             overText,
+            prenamed: drawNaming,
             items: usable,
             startsAt: usable[0].startsAt,
             endsAt: usable[0].endsAt,
@@ -253,6 +311,7 @@ const batcher = new Batcher({
               channelId: DISCORD_MEMBER_CHANNEL_ID,
               dueAt: (d.dueAt ?? DateTime.now()).toUTC().toISO(),
               body: d.text,
+              imageUrl: drawImage?.url ?? null,
             });
           }
           await alert(
@@ -261,11 +320,18 @@ const batcher = new Batcher({
             + `draw, and 30 minutes after it opens.`
             + (DISCORD_MEMBER_ROLE_ID ? '' : '\n  DISCORD_MEMBER_ROLE_ID is not set, so the role will NOT be pinged.'),
           );
+          // The announcement again, as plain text. The scheduler has already
+          // sent the real one to members; this copy is here to be lifted and
+          // pasted somewhere else without being retyped.
+          const announcement = dposts.find((d) => d.slot === 'announcement');
+          if (announcement) {
+            await alertBlock(`**Discord announcement** for ${drawDate}, ready to copy`, announcement.text);
+          }
         } catch (err) {
           await alert(`Draw ${drawDate}: the member Discord posts could not be scheduled: ${err.message}`);
         }
       } else if (publish?.discord) {
-        await alert(`Discord post for ${drawDate}, ready to copy:\n\n${publish.discord}`);
+        await alertBlock(`**Discord post** for ${drawDate}, ready to copy`, publish.discord);
       }
     } catch (err) {
       await alert(`Draw ${drawDate} failed while saving the run: ${err.message}`);
@@ -488,9 +554,15 @@ async function drawPreview(message, raw) {
   try {
     const naming = await nameItems(stand);
     const sets = setsOf(naming.items);
-    const posts = buildPosts({
-      items: naming.items, sets, startsAt, endsAt: startsAt.plus({ hours: 1 }),
-    });
+    const endsAt = startsAt.plus({ hours: 1 });
+    // Both accounts, because they no longer run on the same clock. Previewing
+    // one of them would hide every CollectFinder time and both of its reworded
+    // reminders.
+    const pf = buildPosts({ items: naming.items, sets, startsAt, endsAt, variant: 'default' });
+    const cf = buildPosts({ items: naming.items, sets, startsAt, endsAt, variant: 'collectfinder' });
+    const when = (dt) => (dt
+      ? dt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')
+      : 'draft, no schedule');
 
     await message.reply(
       `Dry run, ${n} item(s). Nothing was sent to Buffer or Canva.\n`
@@ -498,16 +570,34 @@ async function drawPreview(message, raw) {
       + `Sets: ${sets.join(', ') || 'none recognised'}.`,
     );
 
-    for (const post of posts) {
-      const when = post.dueAt
-        ? post.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')
-        : 'draft, no schedule';
-      await message.channel.send(`**${post.slot}** (${when})\n\n${post.text}`.slice(0, 1990));
+    for (const [idx, post] of pf.entries()) {
+      const twin = cf[idx];
+      // Most slots are word for word the same on both accounts and differ only
+      // in when they send, so one copy carrying both times keeps this readable.
+      // The two reminders whose wording differs are printed twice.
+      if (twin && twin.text === post.text) {
+        await message.channel.send(
+          `**${post.slot}** (PF ${when(post.dueAt)} / CF ${when(twin.dueAt)})\n\n${post.text}`.slice(0, 1990),
+        );
+      } else {
+        await message.channel.send(
+          `**${post.slot}** PokemonFindr (${when(post.dueAt)})\n\n${post.text}`.slice(0, 1990),
+        );
+        if (twin) {
+          await message.channel.send(
+            `**${twin.slot}** CollectFinder (${when(twin.dueAt)})\n\n${twin.text}`.slice(0, 1990),
+          );
+        }
+      }
     }
     await message.channel.send(`**wins_draft** (draft, no schedule)\n\n${winsPost()}`.slice(0, 1990));
-    await message.channel.send(
-      `**Discord post**, ready to copy:\n\n${discordPost({ items: naming.items, sets, startsAt })}`.slice(0, 1990),
-    );
+
+    // The member posts as plain text. These are the bodies the scheduler
+    // stores, not a separate rendering of them, so what prints here is what
+    // members get.
+    for (const d of buildDiscordPosts({ items: naming.items, sets, startsAt, endsAt, role: ROLE_MENTION })) {
+      await alertBlock(`**Discord ${d.slot}** (${when(d.dueAt)}), ready to copy`, d.text);
+    }
   } catch (err) {
     await message.reply(`Preview failed: ${err.message}`);
   }
@@ -757,6 +847,69 @@ async function bestbuyRetry(message) {
   }
 }
 
+/**
+ * `!drawrefresh` rebuilds the member Discord posts that have not gone out yet.
+ *
+ * The post bodies are written once when a run fires, so a copy change after
+ * that leaves the rest of the day's posts carrying the old wording. This
+ * rebuilds them from the stored run using the current code. Posts already
+ * sent are left alone and so are the due times: this changes wording, not
+ * the schedule.
+ */
+async function drawRefresh(message) {
+  if (!DISCORD_MEMBER_CHANNEL_ID) {
+    await message.reply('DISCORD_MEMBER_CHANNEL_ID is not set, so there are no member posts to refresh.');
+    return;
+  }
+  try {
+    const run = await latestDrawRun();
+    if (!run) { await message.reply('No fired draw run to refresh.'); return; }
+    if (!run.items.length) { await message.reply(`Run ${run.draw_date} has no items.`); return; }
+
+    // product_name and price survive in the database, the set names do not,
+    // so the naming step runs again to recover them.
+    const naming = await nameItems(run.items);
+    const named = naming.items.map((i, idx) => ({ ...run.items[idx], ...i }));
+    const sets = setsOf(named);
+
+    const posts = buildDiscordPosts({
+      items: named,
+      sets,
+      startsAt: DateTime.fromJSDate(run.starts_at).setZone('America/New_York'),
+      endsAt: DateTime.fromJSDate(run.ends_at).setZone('America/New_York'),
+      role: ROLE_MENTION,
+    });
+
+    const updated = [];
+    for (const p of posts) {
+      const row = await updatePendingDiscordPost({
+        runId: run.id, slot: p.slot, body: p.text, imageUrl: run.image_url ?? null,
+      });
+      if (row) {
+        updated.push(`${row.slot} (${DateTime.fromJSDate(row.due_at).setZone('America/New_York').toFormat('ccc LLL d, h:mma')})`);
+      }
+    }
+
+    await message.reply(
+      `Rebuilt the member posts for ${run.draw_date} from ${named.length} item(s), `
+      + `naming from the ${naming.source}${naming.note ? ` (${naming.note})` : ''}.\n`
+      + (updated.length
+        ? `Updated ${updated.length} pending post(s): ${updated.join(', ')}.`
+        : 'No pending posts to update, they have all gone out already.')
+      + `\n\nNew order:\n${named.length ? itemBlock(orderedPokemon(named.filter((i) => i.classification === 'pokemon' || !i.classification)).concat(named.filter((i) => i.classification && i.classification !== 'pokemon'))) : ''}`.slice(0, 1200),
+    );
+
+    // The rebuilt announcement, so the new wording can be read rather than
+    // inferred from the item order.
+    const announcement = posts.find((p) => p.slot === 'announcement');
+    if (announcement) {
+      await alertBlock(`**Discord announcement** for ${run.draw_date}, rebuilt and ready to copy`, announcement.text);
+    }
+  } catch (err) {
+    await message.reply(`Draw refresh failed: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   // The command branch only. The bot check must NOT cover the monitor channel:
   // the Walmart monitor posts as a bot, so filtering bots there would make the
@@ -781,6 +934,8 @@ client.on(Events.MessageCreate, async (message) => {
     if (bbscan) { await bestbuyScan(message, bbscan[1]); return; }
 
     if (/^!bbretry$/i.test(content)) { await bestbuyRetry(message); return; }
+
+    if (/^!drawrefresh$/i.test(content)) { await drawRefresh(message); return; }
 
     return;
   }

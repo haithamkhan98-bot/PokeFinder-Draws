@@ -39,7 +39,7 @@ test('morning reminder matches the published post', () => {
 });
 
 test('ten minute reminder matches the published post', () => {
-  assert.equal(bySlot.ten_minutes.text, [
+  assert.equal(bySlot.out.text, [
     '💫 Reminder: Prismatic Evolutions Walmart Draw Going Live in 10 Minutes!',
     LINK, ITEM, TIPS_BLOCK, BOOKMARK_LINE, '#Pokemon #ad',
   ].join('\n\n'));
@@ -54,11 +54,11 @@ test('going live matches the published post and drops the bookmark line', () => 
 });
 
 test('thirty minutes left matches the published post, with no tips and no bookmark', () => {
-  assert.equal(bySlot.thirty_left.text, [
+  assert.equal(bySlot.left.text, [
     '💫 30 Minutes Left to Enter the Walmart Prismatic Evolutions Draw!',
     LINK, ITEM, '#Pokemon #ad',
   ].join('\n\n'));
-  assert.ok(!bySlot.thirty_left.text.includes('Tips for Success'));
+  assert.ok(!bySlot.left.text.includes('Tips for Success'));
 });
 
 // The closing post carries no link, so it ends at #Pokemon with no #ad.
@@ -81,9 +81,9 @@ test('each post is scheduled to its own anchor off the start time', () => {
   const at = (slot) => bySlot[slot].dueAt.setZone('America/New_York').toFormat('HH:mm');
   assert.equal(bySlot.announcement.dueAt, null);
   assert.equal(at('morning'), '09:00');
-  assert.equal(at('ten_minutes'), '16:50');
+  assert.equal(at('out'), '16:50');
   assert.equal(at('going_live'), '16:59');   // one minute before, not at the start
-  assert.equal(at('thirty_left'), '17:30');
+  assert.equal(at('left'), '17:30');
   assert.equal(at('over'), '18:00');
 });
 
@@ -96,9 +96,9 @@ test('a midday draw moves its anchors', () => {
   );
   const at = (slot) => p[slot].dueAt.setZone('America/New_York').toFormat('HH:mm');
   assert.equal(at('morning'), '09:00');
-  assert.equal(at('ten_minutes'), '11:50');
+  assert.equal(at('out'), '11:50');
   assert.equal(at('going_live'), '11:59');
-  assert.equal(at('thirty_left'), '12:30');
+  assert.equal(at('left'), '12:30');
   assert.equal(at('over'), '13:00');
 });
 
@@ -287,4 +287,179 @@ test('every member post fits inside a Discord message', () => {
   for (const p of buildDiscordPosts({ items: big, sets: ['30th Anniversary', 'Prismatic Evolutions'], startsAt, endsAt, role: ROLE })) {
     assert.ok(p.text.length < 1990, `${p.slot} is ${p.text.length} characters`);
   }
+});
+
+import { orderedPokemon, setRank, orderedSets } from '../src/copy.js';
+
+// The list used to run in monitor arrival order while the headline was
+// sorted, so a draw could announce 30th Celebration and then list it third.
+test('30th Celebration leads the product list however the items arrive', () => {
+  const items = [
+    { ...poke('Prismatic Evolutions Booster Bundle', '$79.94'), set: 'Prismatic Evolutions' },
+    { ...poke('Ascended Heroes Elite Trainer Box', '$49.99'), set: 'Ascended Heroes' },
+    { ...poke('30th Celebration Elite Trainer Box', '$59.99'), set: '30th Celebration' },
+  ];
+  assert.deepEqual(orderedPokemon(items).map((i) => i.set),
+    ['30th Celebration', 'Prismatic Evolutions', 'Ascended Heroes']);
+  // Two sets of equal rank stay in arrival order and stay grouped; product
+  // shape only reorders within a set.
+
+  const text = buildPosts({
+    items, sets: ['Prismatic Evolutions', 'Ascended Heroes', '30th Celebration'],
+    startsAt, endsAt,
+  })[0].text;
+  assert.ok(text.indexOf('30th Celebration Elite Trainer Box')
+    < text.indexOf('Prismatic Evolutions Booster Bundle'));
+});
+
+test('30th Celebration outranks 30th Anniversary, and both outrank the rest', () => {
+  assert.ok(setRank('30th Celebration') < setRank('30th Anniversary'));
+  assert.ok(setRank('30th Anniversary') < setRank('Prismatic Evolutions'));
+  assert.deepEqual(
+    orderedSets(['Prismatic Evolutions', '30th Anniversary', '30th Celebration']),
+    ['30th Celebration', '30th Anniversary', 'Prismatic Evolutions'],
+  );
+});
+
+test('two items of the same set and shape keep their arrival order', () => {
+  const items = [
+    { ...poke('30th Celebration Sylveon ex Box', '$21.99'), set: '30th Celebration' },
+    { ...poke('30th Celebration Greninja ex Box', '$21.99'), set: '30th Celebration' },
+  ];
+  assert.deepEqual(orderedPokemon(items).map((i) => i.postName),
+    ['30th Celebration Sylveon ex Box', '30th Celebration Greninja ex Box']);
+});
+
+// Two sets of equal rank must not interleave just because one has a bigger
+// product in it.
+test('sets stay grouped, product shape only reorders inside a set', () => {
+  const items = [
+    { ...poke('Prismatic Evolutions Booster Bundle', '$79.94'), set: 'Prismatic Evolutions' },
+    { ...poke('Ascended Heroes Elite Trainer Box', '$49.99'), set: 'Ascended Heroes' },
+    { ...poke('Prismatic Evolutions Elite Trainer Box', '$49.99'), set: 'Prismatic Evolutions' },
+  ];
+  assert.deepEqual(orderedPokemon(items).map((i) => i.postName), [
+    'Prismatic Evolutions Elite Trainer Box',
+    'Prismatic Evolutions Booster Bundle',
+    'Ascended Heroes Elite Trainer Box',
+  ]);
+});
+
+test('an item whose set the naming step could not place sorts last, not first', () => {
+  const items = [
+    { ...poke('Mystery Product', '$9.99'), set: null },
+    { ...poke('30th Celebration Elite Trainer Box', '$59.99'), set: '30th Celebration' },
+  ];
+  assert.deepEqual(orderedPokemon(items).map((i) => i.postName),
+    ['30th Celebration Elite Trainer Box', 'Mystery Product']);
+});
+
+import { productRank } from '../src/copy.js';
+
+// Inside one set: premium collections, then sealed product by descending size.
+test('products inside a set run premium, box, ETB, bundle, blister', () => {
+  const names = [
+    '30th Celebration 3-Pack Blister',
+    '30th Celebration Booster Bundle',
+    '30th Celebration Elite Trainer Box',
+    '30th Celebration Booster Box',
+    '30th Celebration Ultra Premium Collection',
+  ];
+  const items = names.map((n) => ({ ...poke(n, '$9.99'), set: '30th Celebration' }));
+  assert.deepEqual(orderedPokemon(items).map((i) => i.postName), [
+    '30th Celebration Ultra Premium Collection',
+    '30th Celebration Booster Box',
+    '30th Celebration Elite Trainer Box',
+    '30th Celebration Booster Bundle',
+    '30th Celebration 3-Pack Blister',
+  ]);
+});
+
+test('Super Premium ranks with Ultra Premium, and the abbreviations count', () => {
+  assert.equal(productRank('30th Celebration Super Premium Collection'), 0);
+  assert.equal(productRank('Mega Evolution UPC'), 0);
+  assert.equal(productRank('Destined Rivals ETB'), 2);
+  assert.equal(productRank('Delta Reign Booster Display Box'), 1);
+  // A Booster Bundle is not a Booster Box.
+  assert.ok(productRank('Booster Bundle') > productRank('Booster Box'));
+  // Anything unrecognised sorts after the named shapes, not before.
+  assert.ok(productRank('Sylveon ex Box') > productRank('3-Pack Blister'));
+});
+
+// Set still beats product shape: a Celebration blister leads an Ascended UPC.
+test('the set outranks the product shape', () => {
+  const items = [
+    { ...poke('Ascended Heroes Ultra Premium Collection', '$119.99'), set: 'Ascended Heroes' },
+    { ...poke('30th Celebration 3-Pack Blister', '$12.99'), set: '30th Celebration' },
+  ];
+  assert.deepEqual(orderedPokemon(items).map((i) => i.set), ['30th Celebration', 'Ascended Heroes']);
+});
+
+// Walmart hyphenates. "Ultra-Premium Collection-Day and Night" is a real title.
+test('hyphenated product names rank the same as spaced ones', () => {
+  assert.equal(productRank('30th Celebration Ultra-Premium Collection-Day and Night'), 0);
+  assert.equal(productRank('Mega Evolution Delta Reign Elite-Trainer-Box'), 2);
+  assert.equal(productRank('Delta Reign Booster-Box'), 1);
+  // "Ditto Premium Collection" is not an Ultra or Super Premium.
+  assert.ok(productRank('30th Celebration Ditto Premium Collection') > 0);
+});
+
+import { SCHEDULES, orderedItems } from '../src/copy.js';
+
+// Both accounts carry every draw, so identical times mean anyone following
+// both sees the same tweet twice at the same minute.
+test('CollectFinder runs its own reminder intervals', () => {
+  const args = { items: [poke('30th Celebration ETB', '$59.99')], sets: ['30th Celebration'], startsAt, endsAt };
+  const at = (posts, slot) => {
+    const p = posts.find((x) => x.slot === slot);
+    return p.dueAt ? p.dueAt.setZone('America/New_York').toFormat('HH:mm') : 'instant';
+  };
+  const pf = buildPosts({ ...args, variant: 'default' });
+  const cf = buildPosts({ ...args, variant: 'collectfinder' });
+
+  assert.equal(at(pf, 'announcement'), 'instant');
+  assert.equal(at(cf, 'announcement'), 'instant');
+  assert.equal(at(pf, 'morning'), '09:00');
+  assert.equal(at(cf, 'morning'), '11:30');
+  assert.equal(at(pf, 'out'), '16:50');
+  assert.equal(at(cf, 'out'), '16:30');
+  assert.equal(at(pf, 'left'), '17:30');
+  assert.equal(at(cf, 'left'), '17:45');
+  assert.equal(at(pf, 'over'), '18:00');
+  assert.equal(at(cf, 'over'), '18:15');
+  // The one moment that must not move.
+  assert.equal(at(pf, 'going_live'), at(cf, 'going_live'));
+});
+
+// The interval is in the sentence as well as the clock, so they cannot drift.
+test('the reminder wording matches the interval it is sent at', () => {
+  const args = { items: [poke('30th Celebration ETB', '$59.99')], sets: ['30th Celebration'], startsAt, endsAt };
+  const text = (posts, slot) => posts.find((x) => x.slot === slot).text.split('\n')[0];
+  const pf = buildPosts({ ...args, variant: 'default' });
+  const cf = buildPosts({ ...args, variant: 'collectfinder' });
+  assert.match(text(pf, 'out'), /Going Live in 10 Minutes!$/);
+  assert.match(text(cf, 'out'), /Going Live in 30 Minutes!$/);
+  assert.match(text(pf, 'left'), /^💫 30 Minutes Left to Enter/);
+  assert.match(text(cf, 'left'), /^💫 15 Minutes Left to Enter/);
+  for (const [variant, plan] of Object.entries(SCHEDULES)) {
+    const posts = buildPosts({ ...args, variant });
+    assert.ok(text(posts, 'out').includes(`${plan.outMinutes} Minutes`), `${variant} out`);
+    assert.ok(text(posts, 'left').includes(`${plan.leftMinutes} Minutes`), `${variant} left`);
+  }
+});
+
+// The graphic is filled from this list too, so the grid matches the text.
+test('orderedItems puts Pokemon first in set order, then the other games', () => {
+  const items = [
+    op('One Piece OP-11 Booster Box', '$95.88'),
+    { ...poke('Prismatic Evolutions Booster Bundle', '$79.94'), set: 'Prismatic Evolutions' },
+    { ...poke('30th Celebration Booster Bundle', '$26.99'), set: '30th Celebration' },
+    { ...poke('30th Celebration Ultra-Premium Collection', '$224.97'), set: '30th Celebration' },
+  ];
+  assert.deepEqual(orderedItems(items).map((i) => i.postName), [
+    '30th Celebration Ultra-Premium Collection',
+    '30th Celebration Booster Bundle',
+    'Prismatic Evolutions Booster Bundle',
+    'One Piece OP-11 Booster Box',
+  ]);
 });

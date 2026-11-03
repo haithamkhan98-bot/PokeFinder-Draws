@@ -27,6 +27,10 @@ export function startDiscordScheduler(client, { intervalMs = 10_000, onError } =
 
           const sent = await channel.send({
             content: post.body.slice(0, 1990),
+            // The draw graphic, the same one the tweets carry. Discord fetches
+            // it from the Railway image host, which does not expire the way a
+            // Canva export link does.
+            ...(post.image_url ? { files: [post.image_url] } : {}),
             // Without this the role mention renders but does not ping.
             allowedMentions: { parse: ['roles'] },
           });

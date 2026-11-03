@@ -31,7 +31,7 @@ for (const [region, states] of Object.entries(REGIONS)) {
 
 export const STATE_ABBR = {
   Alabama: 'AL', Alaska: 'AK', Arizona: 'AZ', Arkansas: 'AR', California: 'CA', Colorado: 'CO',
-  Connecticut: 'CT', Delaware: 'DE', 'District of Columbia': 'DC', Florida: 'FL', Georgia: 'GA',
+  Connecticut: 'CT', Delaware: 'DE', Florida: 'FL', Georgia: 'GA',
   Hawaii: 'HI', Idaho: 'ID', Illinois: 'IL', Indiana: 'IN', Iowa: 'IA', Kansas: 'KS', Kentucky: 'KY',
   Louisiana: 'LA', Maine: 'ME', Maryland: 'MD', Massachusetts: 'MA', Michigan: 'MI', Minnesota: 'MN',
   Mississippi: 'MS', Missouri: 'MO', Montana: 'MT', Nebraska: 'NE', Nevada: 'NV',
@@ -40,6 +40,11 @@ export const STATE_ABBR = {
   Pennsylvania: 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC', 'South Dakota': 'SD',
   Tennessee: 'TN', Texas: 'TX', Utah: 'UT', Vermont: 'VT', Virginia: 'VA', Washington: 'WA',
   'West Virginia': 'WV', Wisconsin: 'WI', Wyoming: 'WY',
+  // The monitor writes the district as "Washington DC". Spelled out it would
+  // have been dropped from every regional total, which is what the unmapped
+  // warning caught. "Washington" on its own is still the state.
+  'Washington DC': 'DC', 'Washington D.C.': 'DC', 'Washington, D.C.': 'DC',
+  'District of Columbia': 'DC', 'D.C.': 'DC', DC: 'DC',
 };
 
 /** The next POST_HOUR Eastern that has not already passed. */

@@ -706,7 +706,11 @@ Order) - Styles May Vary" suffix come off, and a variant bundle written
 
 Region mapping lives in `REGIONS` in `src/bestbuy.js`. A state the monitor names
 that is not in the map has its units left out of the regional totals, and you
-get an alert naming it, so the numbers can never quietly stop adding up.
+get an alert naming it, so the numbers can never quietly stop adding up. That
+warning earned its keep on the first live scan: the monitor writes the district
+as "Washington DC", not "District of Columbia", so its units were being dropped
+from every total. `STATE_ABBR` now accepts every spelling of it, and
+"Washington" on its own is still the state.
 
 Discord's 2,000 character limit is handled by degrading, never by truncating:
 roughly eight products fit in the full form, beyond that it drops to one line
@@ -750,3 +754,128 @@ made every later preview show stale products.
 
 `src/reddit-copy.js` and its tests ship with this but nothing imports them. That
 is the Reddit work in progress and it is inert until the posting layer is built.
+
+## Product list ordering
+
+`itemBlock` used to list the Pokemon items in whatever order the monitor sent
+the embeds, while the headline was sorted. A draw could therefore announce
+"30th Celebration and Prismatic Evolutions" and then list Prismatic first.
+
+Both now sort through `setRank` in `src/copy.js`: 30th Celebration first, then
+30th Anniversary, then everything else in arrival order. An item whose set the
+naming step could not place sorts last rather than first.
+
+Inside a set, `productRank` orders by product shape: Ultra or Super Premium
+first, then Booster Box, Elite Trainer Box, Booster Bundle, 3-Pack Blister,
+then anything unrecognised. Walmart hyphenates inconsistently, so
+"Ultra-Premium" and "Ultra Premium" rank the same.
+
+Sets stay grouped. Ranking on `setRank` alone would interleave two sets that
+share a rank, so the sets are ordered first and each item carries its set's
+position rather than just its set's rank.
+
+This covers the tweets and the member Discord posts, which share `itemBlock`.
+
+### Applying a copy change to posts already scheduled
+
+Post bodies are written once, when a run fires, so a wording or ordering
+change after that leaves the rest of the day's posts carrying the old text.
+
+`!drawrefresh` rebuilds the member Discord posts for the most recent fired
+run using the current code. Posts already sent are left alone, and the due
+times are not touched: it changes wording, not the schedule. It reports which
+slots it updated and prints the new product order.
+
+The set names are not stored on `draw_items`, only the raw titles, so the
+naming step runs again to recover them. The reply says whether that came from
+the model or the local fallback.
+
+There is no equivalent for the tweets, because Buffer holds those and they can
+be edited through its own API.
+
+## The draw graphic in Discord
+
+Member posts now carry the same Canva graphic as the tweets. `discord_posts`
+gained an `image_url` column, filled from the Railway hosted copy of the export
+rather than the Canva link, which expires within a day.
+
+The column is added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so an
+existing deployment picks it up on the next boot with nothing manual to do.
+Posts scheduled before this deploy have no image and will send without one.
+
+## Per channel reminder schedules
+
+Both X accounts carry every draw. Identical posts at identical times meant
+anyone following both saw the same tweet twice at the same minute.
+
+| slot | PokemonFindr | CollectFinder |
+| --- | --- | --- |
+| announcement | instant | instant |
+| morning | 9:00AM | 11:30AM |
+| out | 4:50PM, "in 10 Minutes" | 4:30PM, "in 30 Minutes" |
+| going_live | 4:59PM | 4:59PM |
+| left | 5:30PM, "30 Minutes Left" | 5:45PM, "15 Minutes Left" |
+| over | 6:00PM | 6:15PM |
+
+Go live stays simultaneous on purpose: it is the one moment that genuinely is
+the moment, and offsetting it only makes one account late.
+
+The schedules live in `SCHEDULES` in `src/copy.js`. `outMinutes` and
+`leftMinutes` drive both the clock and the sentence, so a reminder cannot
+claim an interval it is not sent at. A test walks every schedule and asserts
+the wording matches the timing.
+
+Two slots were renamed, because their interval is no longer fixed:
+`ten_minutes` became `out` and `thirty_left` became `left`. Rows already in
+`buffer_posts` keep their old slot names; nothing reads them back.
+
+`publishRun` now builds one post set per channel and sends each to its own
+channel, walking slot by slot so the announcement reaches both accounts before
+anything else is created.
+
+## The graphic matches the list
+
+The draw graphic is built before the posts, and the naming step used to run
+inside `publishRun`, which is after. So at image time the items had no set
+names and the grid came out in monitor arrival order while the written list
+was sorted.
+
+Naming now runs once in `index.js` before the image, `orderedItems` gives the
+single display order, and the graphic, the product lists and the alt text are
+all filled from it. `publishRun` takes the result as `prenamed` rather than
+making the same API call again.
+
+## The Discord announcement as copy-pastable text
+
+Every draw run report in the alert channel is now followed by a second
+message holding the member Discord announcement inside a code fence, the same
+way `!bbscan` prints its parsed rows. Select it, copy it, paste it anywhere:
+what comes out is the raw text, headings and `<@&role>` and `<t:…>` tags
+intact, rather than Discord's rendering of it.
+
+A fence also means the block cannot ping anyone, which is the reason it is
+safe to print a post carrying the role mention into a channel the role can
+see. `allowedMentions` is set to nothing as well, so there are two
+independent reasons it stays quiet.
+
+Discord caps a message at 2000 characters. `alertBlock` splits a longer body
+on line boundaries and numbers the parts, rather than cutting it off: half an
+announcement is no use to paste. A five item announcement is about 490
+characters, so this only matters for an unusually large draw.
+
+The same block appears in three places:
+
+- after a live draw run fires, the announcement that was just scheduled
+- `!drawrefresh`, the rebuilt announcement, so a wording change can be read
+  rather than inferred from the item order
+- `!drawpreview`, all four member posts, each in its own fence
+
+### A correction to `!drawpreview`
+
+`!drawpreview` was only ever composing one post set, with no variant, so
+after the staggered schedules shipped it was showing the PokemonFindr times
+and wording only. I had said it would show both. It now builds both.
+
+Where the two accounts use the same words it prints one copy carrying both
+times, as `out (PF 4:50PM / CF 4:30PM)`. The two reminders whose wording
+differs between the accounts are printed twice, labelled by account.

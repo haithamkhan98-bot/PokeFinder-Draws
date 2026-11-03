@@ -50,11 +50,19 @@ export const joinEnglish = (list) => {
   return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
 };
 
+/**
+ * 30th Celebration leads, then 30th Anniversary, then everything else in the
+ * order the items arrived. Used for the headline and, through `itemBlock`,
+ * for the product list, so the two can never disagree about what leads.
+ */
+export const setRank = (s) => {
+  if (/30th\s*celebration/i.test(s ?? '')) return 0;
+  if (/30th/i.test(s ?? '')) return 1;
+  return 2;
+};
+
 export function orderedSets(sets) {
-  return [...sets].sort((a, b) => {
-    const rank = (s) => (/30th/i.test(s) ? 0 : 1);
-    return rank(a) - rank(b) || sets.indexOf(a) - sets.indexOf(b);
-  });
+  return [...sets].sort((a, b) => setRank(a) - setRank(b) || sets.indexOf(a) - sets.indexOf(b));
 }
 
 export const pokemonSetsLabel = (sets) => joinEnglish(orderedSets(sets));
@@ -86,8 +94,61 @@ export function otherHeading(others) {
  * under their subheading. Pokemon is always the lead, so it never gets a
  * heading of its own.
  */
+/**
+ * Where a product sits inside its own set.
+ *
+ * Premium collections lead, then the sealed product in descending size. Tested
+ * in this order because the patterns overlap: a Booster Bundle is not a
+ * Booster Box, and an Ultra Premium Collection outranks both.
+ */
+const PRODUCT_RANK = [
+  // "Ultra-Premium" and "Ultra Premium" both appear in Walmart titles.
+  [/\b(ultra|super)[\s-]*premium\b|\bupc\b|\bspc\b/i, 0],
+  [/\bbooster[\s-]*(box|display)\b/i, 1],
+  [/\belite[\s-]*trainer[\s-]*box\b|\betb\b/i, 2],
+  [/\bbooster[\s-]*bundle\b/i, 3],
+  [/\bblister\b|\b3\s*-?\s*pack\b/i, 4],
+];
+
+export function productRank(name) {
+  const t = String(name ?? '');
+  for (const [re, rank] of PRODUCT_RANK) if (re.test(t)) return rank;
+  return PRODUCT_RANK.length;
+}
+
+/**
+ * The Pokemon items in set order.
+ *
+ * The list used to run in whatever order the monitor happened to send the
+ * embeds, so the headline could lead with 30th Celebration while the list
+ * below it led with something else. Sorting by the same rank the headline
+ * uses keeps them in step. Items inside one set keep their arrival order,
+ * and an item with no recognised set sorts last rather than first.
+ */
+export function orderedPokemon(items) {
+  // Sets stay together. Ranking on setRank alone would interleave two sets
+  // that share a rank, so the sets are ordered first and each item carries
+  // its set's position, not just its set's rank.
+  const sets = [...new Set(items.map((i) => i.set).filter(Boolean))];
+  const order = new Map(orderedSets(sets).map((name, idx) => [name, idx]));
+  const setPos = (i) => (i.set && order.has(i.set) ? order.get(i.set) : order.size);
+  const byProduct = (i) => productRank(i.postName ?? i.productName ?? i.rawTitle);
+  return [...items].sort((a, b) => setPos(a) - setPos(b)
+    || byProduct(a) - byProduct(b)
+    || items.indexOf(a) - items.indexOf(b));
+}
+
+/**
+ * Every item in display order: Pokemon by set and product shape, then the
+ * other games. The draw graphic is filled from this too, so the grid and the
+ * written list cannot end up in different orders.
+ */
+export function orderedItems(items) {
+  return [...orderedPokemon(items.filter(isPokemon)), ...items.filter((i) => !isPokemon(i))];
+}
+
 export function itemBlock(items) {
-  const poke = items.filter(isPokemon);
+  const poke = orderedPokemon(items.filter(isPokemon));
   const others = items.filter((i) => !isPokemon(i));
   if (!others.length) return itemLines(poke);
   const tail = `${otherHeading(others)}\n${itemLines(others)}`;
@@ -124,7 +185,24 @@ const join = (...blocks) => blocks.filter(Boolean).join('\n\n');
  * `draw` is the word Draw or Draws: singular when the run covers one set, plural
  * when it covers several, matching how HK writes them.
  */
-export function buildPosts({ items, sets, startsAt, endsAt }) {
+/**
+ * The reminder schedule per channel.
+ *
+ * PokemonFindr and CollectFinder both carry every draw, so an identical set of
+ * posts at identical times means anyone following both sees the same tweet
+ * twice at the same minute. CollectFinder therefore runs its own intervals.
+ *
+ * `outMinutes` and `leftMinutes` appear in the wording as well as the time, so
+ * the two always move together and a reminder cannot claim an interval it is
+ * not actually sent at.
+ */
+export const SCHEDULES = {
+  default: { morningHour: 9, outMinutes: 10, leftMinutes: 30, overOffset: 0 },
+  collectfinder: { morningHour: 11, morningMinute: 30, outMinutes: 30, leftMinutes: 15, overOffset: 15 },
+};
+
+export function buildPosts({ items, sets, startsAt, endsAt, variant = 'default' }) {
+  const plan = SCHEDULES[variant] ?? SCHEDULES.default;
   const label = headlineLabel(sets, items);
   // Plural once the draw spans more than one named thing, whether that is two
   // Pokemon sets or one set plus a non Pokemon category.
@@ -147,22 +225,26 @@ export function buildPosts({ items, sets, startsAt, endsAt }) {
     },
     {
       slot: 'morning',
-      dueAt: et.set({ hour: 9, minute: 0, second: 0, millisecond: 0 }),
+      dueAt: et.set({
+        hour: plan.morningHour, minute: plan.morningMinute ?? 0, second: 0, millisecond: 0,
+      }),
       text: join(
         `💫 Reminder! ${label} Walmart ${noun} Going Live Today at ${when}!`,
         link, lines, TIPS, BOOKMARK, HASHTAGS,
       ),
     },
     {
-      slot: 'ten_minutes',
-      dueAt: et.minus({ minutes: 10 }),
+      slot: 'out',
+      dueAt: et.minus({ minutes: plan.outMinutes }),
       text: join(
-        `💫 Reminder: ${label} Walmart ${noun} Going Live in 10 Minutes!`,
+        `💫 Reminder: ${label} Walmart ${noun} Going Live in ${plan.outMinutes} Minutes!`,
         link, lines, TIPS, BOOKMARK, HASHTAGS,
       ),
     },
     {
-      // One minute before the draw opens, not at the start time.
+      // One minute before the draw opens, not at the start time. The same on
+      // both channels: this is the moment, and offsetting it just makes one
+      // account late.
       slot: 'going_live',
       dueAt: et.minus({ minutes: 1 }),
       text: join(
@@ -171,17 +253,17 @@ export function buildPosts({ items, sets, startsAt, endsAt }) {
       ),
     },
     {
-      slot: 'thirty_left',
-      dueAt: et.plus({ minutes: 30 }),
+      slot: 'left',
+      dueAt: endsAt.setZone('America/New_York').minus({ minutes: plan.leftMinutes }),
       text: join(
-        `💫 30 Minutes Left to Enter the Walmart ${label} ${noun}!`,
+        `💫 ${plan.leftMinutes} Minutes Left to Enter the Walmart ${label} ${noun}!`,
         link, lines, HASHTAGS,
       ),
     },
     {
       // Carries the image but no link, so it ends at #Pokemon with no #ad.
       slot: 'over',
-      dueAt: endsAt.setZone('America/New_York'),
+      dueAt: endsAt.setZone('America/New_York').plus({ minutes: plan.overOffset }),
       text: join(
         "💫 Today's Walmart Draw is now over! We will post as soon as wins start going out!",
         "Follow & Turn Notifications On! We'll post the next draws as soon as they're announced!",

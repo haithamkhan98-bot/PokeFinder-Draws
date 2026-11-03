@@ -96,6 +96,10 @@ CREATE TABLE IF NOT EXISTS discord_posts (
 CREATE INDEX IF NOT EXISTS discord_posts_due_idx
   ON discord_posts(due_at) WHERE posted_at IS NULL;
 
+-- The draw graphic, so member posts carry the same image as the tweets.
+-- Added after the table, so existing deployments pick it up on the next boot.
+ALTER TABLE discord_posts ADD COLUMN IF NOT EXISTS image_url TEXT;
+
 -- Walmart's collectibles queue, which drops at 9PM Eastern on Wednesdays.
 -- Kept apart from draw_runs because a queue run has no entry window, posts to
 -- one channel rather than two, and groups its items by game.

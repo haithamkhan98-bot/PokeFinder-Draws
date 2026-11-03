@@ -137,13 +137,14 @@ export async function markComplete(runId) {
   await pool.query("UPDATE draw_runs SET status = 'complete', completed_at = now() WHERE id = $1", [runId]);
 }
 
-export async function scheduleDiscordPost({ runId, slot, channelId, dueAt, body }) {
+export async function scheduleDiscordPost({ runId, slot, channelId, dueAt, body, imageUrl = null }) {
   await pool.query(
-    `INSERT INTO discord_posts (run_id, slot, channel_id, due_at, body)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO discord_posts (run_id, slot, channel_id, due_at, body, image_url)
+     VALUES ($1,$2,$3,$4,$5,$6)
      ON CONFLICT (run_id, slot) DO UPDATE
-       SET due_at = EXCLUDED.due_at, body = EXCLUDED.body, channel_id = EXCLUDED.channel_id`,
-    [runId, slot, channelId, dueAt, body],
+       SET due_at = EXCLUDED.due_at, body = EXCLUDED.body,
+           channel_id = EXCLUDED.channel_id, image_url = EXCLUDED.image_url`,
+    [runId, slot, channelId, dueAt, body, imageUrl],
   );
 }
 
@@ -155,7 +156,7 @@ export async function scheduleDiscordPost({ runId, slot, channelId, dueAt, body 
  */
 export async function claimDueDiscordPosts({ limit = 5 } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, run_id, slot, channel_id, body, attempts
+    `SELECT id, run_id, slot, channel_id, body, image_url, attempts
        FROM discord_posts
       WHERE posted_at IS NULL AND due_at <= now() AND attempts < 5
       ORDER BY due_at
@@ -391,4 +392,39 @@ export async function pendingBestbuyRun() {
     [rows[0].id],
   );
   return { ...rows[0], items: items.rows };
+}
+
+/** The most recent fired draw run and the items it held. For `!drawrefresh`. */
+export async function latestDrawRun() {
+  const { rows } = await pool.query(
+    `SELECT id, draw_date, starts_at, ends_at, image_url
+       FROM draw_runs WHERE fired_at IS NOT NULL
+      ORDER BY fired_at DESC LIMIT 1`,
+  );
+  if (!rows.length) return null;
+  const items = await pool.query(
+    `SELECT pid, raw_title AS "rawTitle", product_name AS "productName",
+            price_display AS "priceDisplay", price_cents AS "priceCents",
+            image_url AS "imageUrl", classification
+       FROM draw_items WHERE run_id = $1 AND withdrawn = FALSE ORDER BY id`,
+    [rows[0].id],
+  );
+  return { ...rows[0], items: items.rows };
+}
+
+/**
+ * Rewrite a scheduled member post that has not gone out yet.
+ *
+ * Only touches rows with no posted_at, so a copy change can be applied to the
+ * rest of a day's posts without disturbing the ones already sent. The due time
+ * is deliberately left alone: this changes wording, not the schedule.
+ */
+export async function updatePendingDiscordPost({ runId, slot, body, imageUrl }) {
+  const { rows } = await pool.query(
+    `UPDATE discord_posts SET body = $3, image_url = $4
+      WHERE run_id = $1 AND slot = $2 AND posted_at IS NULL
+      RETURNING slot, due_at`,
+    [runId, slot, body, imageUrl],
+  );
+  return rows[0] ?? null;
 }

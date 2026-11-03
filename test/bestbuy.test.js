@@ -199,3 +199,20 @@ test('variant bundles join with a slash, not the word or', () => {
   // A word merely containing the letters is untouched.
   assert.equal(shortTitle('Pokémon - Trading Card Game: Explorer Booster Box'), 'Explorer Booster Box');
 });
+
+// The monitor writes the district as "Washington DC", not "District of
+// Columbia". Spelled that way its units were dropped from every total.
+test('Washington DC maps to the district, not to Washington state', () => {
+  const { stock, unknown } = parseStates('Washington [64]\nWashington DC [12]');
+  assert.deepEqual(stock, { WA: 64, DC: 12 });
+  assert.deepEqual(unknown, []);
+  assert.deepEqual(byRegion(stock), { West: 64, Southeast: 12 });
+});
+
+test('the other ways the district can be written also map', () => {
+  for (const name of ['District of Columbia', 'Washington D.C.', 'Washington, D.C.', 'D.C.', 'DC']) {
+    const { stock, unknown } = parseStates(`${name} [5]`);
+    assert.deepEqual(stock, { DC: 5 }, `${name} did not map`);
+    assert.deepEqual(unknown, [], `${name} was reported unmapped`);
+  }
+});

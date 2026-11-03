@@ -1,6 +1,9 @@
 import { claimDueBestbuyRun, markBestbuyPosted, markBestbuyFailed } from './db.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
 
+/** Matches the attempts filter in claimDueBestbuyRun. */
+export const MAX_ATTEMPTS = 5;
+
 /**
  * Sends the BestBuy digest when its 7AM slot comes round.
  *
@@ -20,9 +23,11 @@ export function startBestbuyScheduler(client, {
   const tick = async () => {
     if (running || !client.isReady()) return;
     running = true;
+    let claimed = null;
     try {
       const run = await claimDueBestbuyRun();
       if (!run) return;
+      claimed = run;
 
       const digest = bestbuyDigest({ items: run.items, role, checkerChannel });
       if (!digest) {
@@ -50,11 +55,21 @@ export function startBestbuyScheduler(client, {
       await markBestbuyPosted(run.id, { messageId: sent.id, body: digest.text, form: digest.form });
       onPosted?.({ run, digest, messageId: sent.id });
     } catch (err) {
+      let attempts = null;
       try {
-        const run = await claimDueBestbuyRun();
-        if (run) await markBestbuyFailed(run.id, err.message);
+        if (claimed) attempts = await markBestbuyFailed(claimed.id, err.message);
       } catch { /* the failure is already being reported */ }
-      onError?.(`BestBuy digest failed: ${err.message}`);
+      // The ticker stops retrying at 5. Say so, or the run goes quiet and the
+      // only symptom is a morning with no post.
+      const gaveUp = attempts !== null && attempts >= MAX_ATTEMPTS;
+      onError?.(
+        `BestBuy digest failed: ${err.message}`
+        + (attempts !== null ? ` (attempt ${attempts} of ${MAX_ATTEMPTS})` : '')
+        + (gaveUp && claimed
+          ? `\n\nGiving up on the ${claimed.post_date} digest. Fix the cause and run `
+            + '`!bbretry` to put it back in the queue.'
+          : ''),
+      );
     } finally {
       running = false;
     }

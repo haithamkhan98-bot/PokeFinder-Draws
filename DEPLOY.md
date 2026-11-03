@@ -726,6 +726,26 @@ character count and which form it used, then prints the digest itself. Mentions
 are suppressed on that message, so the role pill is visible but nobody is
 pinged, and nothing is written to the run or sent to `#instore-alerts`.
 
+### When a morning goes by with no digest
+
+Three causes look identical from outside: the bot cannot see the monitor
+channel, no summary was posted that night, or the parser does not recognise
+the embeds. `!bbscan` separates them without waiting for another night.
+
+It reads the last 50 messages (or `!bbscan 100`) from the monitor channel and
+reports how many embeds it found, how many parsed as Daily Summaries, and for
+anything skipped, the actual author name or Type value that did not match. It
+writes nothing. A permissions error in the reply means the bot cannot see the
+channel, which is also why nothing would ever be banked.
+
+`!bbretry` resets a run the ticker gave up on. The ticker stops after five
+failed attempts; it now says so in the alert rather than going quiet. Fix the
+cause, run `!bbretry`, and it is picked up within a minute.
+
+`!bbpreview` reports a stuck run rather than hiding it, and reads the newest
+unposted run rather than the oldest. Reading the oldest meant one failed run
+made every later preview show stale products.
+
 ### Not included
 
 `src/reddit-copy.js` and its tests ship with this but nothing imports them. That

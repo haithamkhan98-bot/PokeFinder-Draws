@@ -349,18 +349,39 @@ export async function markBestbuyPosted(id, { messageId, body, form }) {
   );
 }
 
+/** Returns the new attempt count so the caller can say when it has given up. */
 export async function markBestbuyFailed(id, message) {
-  await pool.query(
-    'UPDATE bestbuy_runs SET attempts = attempts + 1, error = $2 WHERE id = $1',
+  const { rows } = await pool.query(
+    `UPDATE bestbuy_runs SET attempts = attempts + 1, error = $2
+      WHERE id = $1 RETURNING attempts`,
     [id, String(message).slice(0, 500)],
   );
+  return rows[0]?.attempts ?? 0;
 }
 
-/** The next unposted BestBuy run and its items, due or not. For previews. */
+/** Clear the attempt count so a run the ticker gave up on can be retried. */
+export async function retryBestbuyRun(id) {
+  const { rows } = await pool.query(
+    `UPDATE bestbuy_runs SET attempts = 0, error = NULL
+      WHERE id = $1 AND posted_at IS NULL RETURNING id, post_date`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * The most recent unposted BestBuy run and its items, due or not.
+ *
+ * Newest first, not oldest. An old run that failed its attempts used to sit
+ * at the front of this queue forever and make every preview show stale
+ * products long after newer nights had arrived. `attempts` and `error` come
+ * back too so the preview can say a run is stuck instead of pretending it is
+ * fine.
+ */
 export async function pendingBestbuyRun() {
   const { rows } = await pool.query(
-    `SELECT id, post_date, post_at FROM bestbuy_runs
-      WHERE posted_at IS NULL ORDER BY post_at LIMIT 1`,
+    `SELECT id, post_date, post_at, attempts, error FROM bestbuy_runs
+      WHERE posted_at IS NULL ORDER BY post_at DESC LIMIT 1`,
   );
   if (!rows.length) return null;
   const items = await pool.query(

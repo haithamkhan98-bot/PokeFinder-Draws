@@ -22,7 +22,7 @@ import { scheduleDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
 import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
-import { recordBestbuyItem, pendingBestbuyRun } from './db.js';
+import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 
 const {
@@ -614,7 +614,10 @@ async function bestbuyPreview(message, raw) {
       const run = await pendingBestbuyRun();
       if (run?.items?.length) {
         items = run.items;
-        source = `the ${run.items.length} item(s) banked for ${run.post_date}`;
+        source = `the ${run.items.length} item(s) banked for ${run.post_date}`
+          + (run.attempts
+            ? `, which has FAILED ${run.attempts} time(s): ${run.error ?? 'no error recorded'}`
+            : '');
       }
     }
 
@@ -663,6 +666,97 @@ async function bestbuyPreview(message, raw) {
   }
 }
 
+/**
+ * `!bbscan` reads the monitor channel and reports what the parser makes of it.
+ *
+ * Built because a silent morning has three possible causes that look
+ * identical from the outside: the bot cannot see the channel, no summary was
+ * posted, or the parser does not recognise the embeds. This separates them
+ * without waiting for another night. It writes nothing.
+ */
+async function bestbuyScan(message, raw) {
+  if (!BESTBUY_CHANNEL_ID) {
+    await message.reply('BESTBUY_CHANNEL_ID is not set, so there is no channel to scan.');
+    return;
+  }
+  const limit = Math.min(Math.max(parseInt(raw, 10) || 50, 1), 100);
+
+  try {
+    const channel = await client.channels.fetch(BESTBUY_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply(`Channel ${BESTBUY_CHANNEL_ID} is not a text channel the bot can read.`);
+      return;
+    }
+
+    const fetched = await channel.messages.fetch({ limit });
+    const lines = [];
+    let embeds = 0;
+    let matched = 0;
+    const skipped = new Map();
+    const errors = [];
+    let newest = null;
+
+    for (const m of fetched.values()) {
+      if (!newest || m.createdTimestamp > newest) newest = m.createdTimestamp;
+      for (const embed of m.embeds ?? []) {
+        embeds += 1;
+        const author = embed?.author?.name?.trim() ?? '(no author)';
+        const type = (embed?.fields ?? []).find(
+          (f) => String(f?.name ?? '').trim().toLowerCase() === 'type',
+        )?.value ?? '(no Type field)';
+
+        const item = parseSummaryEmbed(embed, { now: DateTime.now() });
+        if (item === null) {
+          const why = author !== SUMMARY_AUTHOR
+            ? `author is "${author}"` : `Type is "${type}"`;
+          skipped.set(why, (skipped.get(why) ?? 0) + 1);
+          continue;
+        }
+        if (item.error) { errors.push(`${item.title ?? '(no title)'}: ${item.error}`); continue; }
+        matched += 1;
+        if (lines.length < 10) {
+          lines.push(`${item.sku}  ${item.units} units / ${item.states} states  ${item.rawTitle.slice(0, 70)}`
+            + (item.unknownStates.length ? `  [unmapped: ${item.unknownStates.join(', ')}]` : ''));
+        }
+      }
+    }
+
+    const ago = newest
+      ? DateTime.fromMillis(newest).setZone('America/New_York').toFormat('ccc LLL d, h:mma')
+      : 'never';
+
+    await message.reply(
+      `Scanned the last ${fetched.size} message(s) in <#${BESTBUY_CHANNEL_ID}>. `
+      + `Newest message ${ago}.\n`
+      + `${embeds} embed(s): **${matched} parsed as Daily Summaries**, `
+      + `${[...skipped.values()].reduce((a, b) => a + b, 0)} skipped, ${errors.length} unreadable.`
+      + (skipped.size ? `\n\nSkipped because:\n${[...skipped].map(([w, n]) => `  ${n} x ${w}`).join('\n')}` : '')
+      + (errors.length ? `\n\nUnreadable:\n${errors.slice(0, 5).join('\n')}` : '')
+      + (lines.length ? `\n\nParsed:\n\`\`\`\n${lines.join('\n')}\n\`\`\`` : ''),
+    );
+  } catch (err) {
+    await message.reply(
+      `Could not scan <#${BESTBUY_CHANNEL_ID}>: ${err.message}\n`
+      + 'If this is a permissions error the bot cannot see the monitor channel, '
+      + 'which would also explain why nothing is ever banked.',
+    );
+  }
+}
+
+/** `!bbretry` puts a run the ticker gave up on back in the queue. */
+async function bestbuyRetry(message) {
+  try {
+    const run = await pendingBestbuyRun();
+    if (!run) { await message.reply('No unposted BestBuy run to retry.'); return; }
+    const back = await retryBestbuyRun(run.id);
+    await message.reply(back
+      ? `Reset the ${back.post_date} digest. The ticker will pick it up within a minute.`
+      : 'That run has already been posted.');
+  } catch (err) {
+    await message.reply(`Retry failed: ${err.message}`);
+  }
+}
+
 client.on(Events.MessageCreate, async (message) => {
   // The command branch only. The bot check must NOT cover the monitor channel:
   // the Walmart monitor posts as a bot, so filtering bots there would make the
@@ -682,6 +776,11 @@ client.on(Events.MessageCreate, async (message) => {
 
     const bb = content.match(/^!bbpreview(?:\s+(\d+))?$/i);
     if (bb) { await bestbuyPreview(message, bb[1]); return; }
+
+    const bbscan = content.match(/^!bbscan(?:\s+(\d+))?$/i);
+    if (bbscan) { await bestbuyScan(message, bbscan[1]); return; }
+
+    if (/^!bbretry$/i.test(content)) { await bestbuyRetry(message); return; }
 
     return;
   }

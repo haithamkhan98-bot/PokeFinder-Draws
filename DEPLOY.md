@@ -920,3 +920,23 @@ due at once and the ticker sends within the minute.
 
 `!bbscan` also used to print only the first 10 parsed rows under an accurate
 count, which read as a parser miss. The cap is now 25.
+
+### The digest follows the draw ordering
+
+The BestBuy post used to sort by group and then by units, so the biggest
+restock of the night led regardless of what it was. It now uses the same
+convention as the Walmart draws: Pokemon first with its sets held together
+and 30th Celebration leading, products inside a set running Ultra or Super
+Premium, Booster Box, Elite Trainer Box, Booster Bundle, blister, then the
+other games in queue order. Units only break ties that remain.
+
+That needs set names, so `nameItems` now runs before the digest is built, the
+same call the draws make. It falls back to local naming by itself, so a
+naming outage costs the set grouping and never the post.
+
+### Overnight timing
+
+The burst has been arriving from around midnight rather than 1AM. Nothing
+needed changing: an embed is filed against the next 7AM that has not passed,
+so anything from late evening through 6:59AM lands in that morning's digest
+and an 11:45PM embed shares a post with a 3AM one. The only cliff is 7AM.

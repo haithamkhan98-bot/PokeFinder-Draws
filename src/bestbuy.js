@@ -2,10 +2,14 @@
  * The BestBuy in store Daily Summary.
  *
  * One embed per product, each listing every state that is getting stock and
- * how many units. They land in a burst around 1AM and are not posted every
- * day. Nothing is published until 7AM, so unlike the draws there is no race:
- * items are collected against the night they belong to and the post is
- * assembled when the 7AM slot comes round.
+ * how many units. They land in a burst overnight, anywhere from before
+ * midnight to around 3AM, and not every day. Nothing is published until 7AM,
+ * so unlike the draws there is no race: items are collected against the night
+ * they belong to and the post is assembled when the 7AM slot comes round.
+ *
+ * The night an embed belongs to is the next 7AM that has not passed, so the
+ * hour it arrives does not matter as long as it is before 7AM. An embed at
+ * 11:45PM and one at 3AM share a digest. The only cliff is 7AM itself.
  */
 import { DateTime } from 'luxon';
 import { NOT_CARDS } from './parse.js';

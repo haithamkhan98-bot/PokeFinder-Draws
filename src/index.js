@@ -729,7 +729,8 @@ async function bestbuyPreview(message, raw) {
       source = `${items.length} stand in product(s), because nothing is banked`;
     }
 
-    const digest = bestbuyDigest({ items, role, checkerChannel });
+    const naming = await nameItems(items.map((i, idx) => ({ ...i, pid: i.sku ?? String(idx) })));
+    const digest = bestbuyDigest({ items: naming.items, role, checkerChannel });
     const postAt = nextPostAt(DateTime.now());
 
     if (!digest) {
@@ -952,8 +953,8 @@ async function bestbuyBackfill(message, raw) {
       + `${errors.length} unreadable.`
       + (slotLines.length ? `\n\nDigest slots:\n${slotLines.join('\n')}` : '')
       + (late
-        ? `\n\n${late} of these belong to a digest that has already been sent. `
-          + 'Run `!bbretry` to send it again with them included.'
+        ? `\n\n${late} of these belong to a digest that is already closed. `
+          + 'Run `!bbresend` to reopen it and send it with them included.'
         : '')
       + (errors.length ? `\n\nUnreadable:\n${errors.slice(0, 5).join('\n')}` : '')
       + (banked.length

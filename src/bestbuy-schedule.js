@@ -1,5 +1,6 @@
 import { claimDueBestbuyRun, markBestbuyPosted, markBestbuyFailed } from './db.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
+import { nameItems } from './naming.js';
 
 /** Matches the attempts filter in claimDueBestbuyRun. */
 export const MAX_ATTEMPTS = 5;
@@ -12,7 +13,8 @@ export const MAX_ATTEMPTS = 5;
  * a redeploy between 1AM and 7AM cannot lose the morning's digest.
  *
  * The body is built here rather than when the embeds arrived, so everything
- * collected overnight is in the post, including anything that landed at 3AM.
+ * collected overnight is in the post, whether it landed before midnight or
+ * at 3AM.
  */
 export function startBestbuyScheduler(client, {
   intervalMs = 60_000, channelId, role, checkerChannel, live = false, onError, onPosted,
@@ -29,7 +31,11 @@ export function startBestbuyScheduler(client, {
       if (!run) return;
       claimed = run;
 
-      const digest = bestbuyDigest({ items: run.items, role, checkerChannel });
+      // Named here rather than inside the digest so the BestBuy post groups
+      // sets the way the draws do. nameItems falls back to local naming on
+      // its own, so a naming outage costs ordering, never the post.
+      const naming = await nameItems(run.items.map((i, idx) => ({ ...i, pid: i.sku ?? String(idx) })));
+      const digest = bestbuyDigest({ items: naming.items, role, checkerChannel });
       if (!digest) {
         // Nothing postable, usually a night of merchandise only. Close the run
         // so it is not retried every minute for the rest of the day.

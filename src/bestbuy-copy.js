@@ -5,7 +5,7 @@
  * products and what to drop if the message will not fit in a Discord post.
  */
 import { shortenQueueName } from './queue-copy.js';
-import { joinEnglish } from './copy.js';
+import { joinEnglish, orderedPokemon } from './copy.js';
 import { classifyQueue, GROUP_ORDER } from './queue.js';
 
 export const DISCORD_LIMIT = 2000;
@@ -53,22 +53,39 @@ function compactBlock(i) {
  * `role` and `checkerChannel` are the mention strings. Discord only pings
  * when it is given <@&id>, and only renders a channel link from <#id>.
  *
- * Ordering follows the rest of the bot: Pokemon, then One Piece, Magic,
- * sports and anything else, with the biggest restock leading inside each
- * group. `classifyQueue` does the sorting and the excluding, so BestBuy can
- * never disagree with the draws and the queues about what a Pokemon product
- * is or what counts as merchandise.
+ * Ordering matches the Walmart draws rather than being its own thing. Pokemon
+ * leads, its sets ordered with 30th Celebration first and held together, and
+ * inside a set the products run Ultra or Super Premium, Booster Box, Elite
+ * Trainer Box, Booster Bundle, blister. Everything else follows in the queue
+ * group order, One Piece then Magic then sports. Biggest restock breaks every
+ * remaining tie, which is what `orderedPokemon` falls back to because the list
+ * handed to it is already sorted by units.
+ *
+ * `items` may carry `postName` and `set` from `nameItems`, the same naming the
+ * draws use. Without them it falls back to the BestBuy title shortener, and
+ * the set grouping simply has nothing to group on.
  */
 export function bestbuyDigest({ items, role, checkerChannel }) {
-  const rank = (i) => {
-    const idx = GROUP_ORDER.indexOf(classifyQueue(i.rawTitle));
+  const groupRank = (g) => {
+    const idx = GROUP_ORDER.indexOf(g);
     return idx === -1 ? GROUP_ORDER.length : idx;
   };
 
-  const usable = items
-    .map((i) => ({ ...i, name: shortTitle(i.rawTitle), group: classifyQueue(i.rawTitle) }))
+  const named = items
+    .map((i) => {
+      const group = classifyQueue(i.rawTitle);
+      const name = i.postName || shortTitle(i.rawTitle);
+      // productRank reads postName first, so it must be the display name.
+      return { ...i, name, postName: name, group, classification: group };
+    })
     .filter((i) => i.group !== 'excluded' && !i.merch)
-    .sort((a, b) => rank(a) - rank(b) || b.units - a.units);
+    .sort((a, b) => b.units - a.units);
+
+  const poke = orderedPokemon(named.filter((i) => i.group === 'pokemon'));
+  const rest = named
+    .filter((i) => i.group !== 'pokemon')
+    .sort((a, b) => groupRank(a.group) - groupRank(b.group) || b.units - a.units);
+  const usable = [...poke, ...rest];
 
   if (!usable.length) return null;
 

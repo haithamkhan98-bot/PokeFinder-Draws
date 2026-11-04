@@ -14,8 +14,17 @@ export const DISCORD_LIMIT = 2000;
 export function shortTitle(raw) {
   let t = String(raw ?? '');
   t = t.replace(/^Pok[eé]mon\s*[-–—]\s*Trading Card Game:?\s*/i, '');
-  t = t.replace(/\bScarlet\s*&\s*Violet\s*/i, '');
-  t = t.replace(/\s*\(\s*1\s*Ex Box per Order\s*\)\s*/i, ' ');
+  t = t.replace(/\bScarlet\s*&\s*Violet\s*[-–—]?\s*/i, '');
+  t = t.replace(/\bMega\s*Evolution\s*[-–—]\s*/gi, '');
+  // BestBuy appends the per order cap to the title itself, in as many
+  // wordings as there are product types. The cap is already stated in the
+  // post, so none of them belong in a product name.
+  t = t.replace(/\s*\(\s*1\s+[^)]{0,48}?per Order\s*\)\s*/gi, ' ');
+  // The hyphenated spelling is BestBuy's; the shortener only knows the spaced
+  // one, so without this "Ultra-Premium Collection" never becomes UPC.
+  t = t.replace(/\bUltra[-–—]Premium\b/gi, 'Ultra Premium');
+  // Their own typo, carried in the Figure Collection titles.
+  t = t.replace(/\bMewto\b/g, 'Mewtwo');
   t = t.replace(/\s*[-–—]\s*Styles May Vary\s*$/i, '');
   // BestBuy writes variant bundles as "Sylveon ex Box or Greninja ex Box".
   // A slash reads better in a post than the word.
@@ -29,23 +38,15 @@ const units = (n) => n.toLocaleString('en-US');
 export const regionLine = (regions) =>
   Object.entries(regions).map(([r, n]) => `${r} ${units(n)}`).join(' | ');
 
-/** The full block for one product. */
-function productBlock(i) {
+/** One bullet per product: name, price, units, states. */
+function productLine(i) {
   const price = i.priceDisplay ? ` ${i.priceDisplay}` : '';
-  return [
-    `**${i.name}**${price}`,
-    `${units(i.units)} units across ${i.states} ${i.states === 1 ? 'state' : 'states'}`,
-    regionLine(i.regions),
-  ].join('\n');
+  return `• **${i.name}**${price}, ${units(i.units)} units across `
+    + `${i.states} ${i.states === 1 ? 'state' : 'states'}`;
 }
 
-/** The fallback when the full version will not fit: one line per product. */
-function compactBlock(i) {
-  const price = i.priceDisplay ? ` ${i.priceDisplay}` : '';
-  const lead = Object.entries(i.regions)[0];
-  return `**${i.name}**${price} ${units(i.units)} units, ${i.states} states`
-    + (lead ? `, mostly ${lead[0]}` : '');
-}
+/** The fallback when the full list will not fit: name and price only. */
+const shortLine = (i) => `• **${i.name}**${i.priceDisplay ? ` ${i.priceDisplay}` : ''}`;
 
 /**
  * The digest.
@@ -74,7 +75,7 @@ export function bestbuyDigest({ items, role, checkerChannel }) {
   const named = items
     .map((i) => {
       const group = classifyQueue(i.rawTitle);
-      const name = i.postName || shortTitle(i.rawTitle);
+      const name = shortTitle(i.postName || i.rawTitle);
       // productRank reads postName first, so it must be the display name.
       return { ...i, name, postName: name, group, classification: group };
     })
@@ -90,20 +91,32 @@ export function bestbuyDigest({ items, role, checkerChannel }) {
   if (!usable.length) return null;
 
   const head = '# BestBuy Instore Drops';
-  const intro = `${role} ${joinEnglish(usable.map((i) => `**${i.name}**`))} are dropping at BestBuy locations this week!`;
+  const intro = `${role} The following items are dropping at BestBuy locations across the US this week:`;
   const tail = `Be sure to use the BestBuy stock checker in ${checkerChannel} every morning to see when locations by you are restocking!`;
 
-  const build = (blocks) => [head, intro, ...blocks, tail].join('\n\n');
+  // The list is the post. Everything the reader acts on is in it, so the
+  // opening line no longer repeats every product name before they reach it.
+  const build = (lines) => [head, intro, lines.join('\n'), tail].join('\n\n');
 
-  const full = build(usable.map(productBlock));
+  const full = build(usable.map(productLine));
   if (full.length <= DISCORD_LIMIT) return { text: full, form: 'full', items: usable };
 
-  // Too long for one Discord message. Keep every product but drop to one line
-  // each rather than silently cutting products off the bottom.
-  const compact = build(usable.map(compactBlock));
+  // Too long for one Discord message. Drop the counts rather than silently
+  // cutting products off the bottom: which products dropped matters more.
+  const compact = build(usable.map(shortLine));
   if (compact.length <= DISCORD_LIMIT) return { text: compact, form: 'compact', items: usable };
 
-  // Still too long, which means a very large summary. Drop the per product
-  // detail entirely and keep the names and the call to action.
-  return { text: build([]), form: 'names only', items: usable };
+  // A very large night. Keep as many names as fit, and say how many are left.
+  const fit = [];
+  for (const i of usable) {
+    const next = [...fit.map(shortLine), `• and ${usable.length - fit.length} more`];
+    if (build(next).length > DISCORD_LIMIT) break;
+    fit.push(i);
+  }
+  const remaining = usable.length - fit.length;
+  return {
+    text: build([...fit.map(shortLine), ...(remaining ? [`• and ${remaining} more`] : [])]),
+    form: 'truncated',
+    items: usable,
+  };
 }

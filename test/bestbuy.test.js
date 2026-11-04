@@ -121,16 +121,19 @@ test('inside a group the biggest restock leads', () => {
   assert.ok(d.text.endsWith('every morning to see when locations by you are restocking!'));
 });
 
-test('the opening line bolds every product name', () => {
+test('the opening line names no products and the list carries them', () => {
   const d = bestbuyDigest({
     items: [item('Pokemon TCG 30th Celebration Elite Trainer Box', 900, { West: 900 }),
       item('Pokemon TCG Prismatic Evolutions Booster Bundle', 100, { West: 100 })],
     role: '<@&1>', checkerChannel: '<#2>',
   });
-  const intro = d.text.split('\n\n')[1];
-  assert.ok(intro.includes('**30th Celebration ETB**'));
-  assert.ok(intro.includes('**Prismatic Evolutions Booster Bundle**'));
-  assert.ok(intro.endsWith('are dropping at BestBuy locations this week!'));
+  const [, intro, list] = d.text.split('\n\n');
+  assert.equal(intro, '<@&1> The following items are dropping at BestBuy locations across the US this week:');
+  assert.ok(list.includes('• **30th Celebration ETB**'));
+  assert.ok(list.includes('• **Prismatic Evolutions Booster Bundle**'));
+  // Regions were dropped: units and states are all a reader needs.
+  assert.ok(!d.text.includes('West'));
+  assert.ok(!d.text.includes('mostly'));
 });
 
 test('merchandise is left out of the digest', () => {

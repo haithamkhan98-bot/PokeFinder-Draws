@@ -955,3 +955,36 @@ A wrong variable NAME still cannot be guessed at, so the bot now shows what it
 reads instead of only its verdict. `!bbstatus` prints every BestBuy setting as
 this process sees it, including a name that is simply absent, and `!bbresend`
 quotes the value it read when it declines to go live.
+
+### Digest copy: the list is the post
+
+The opening line used to name every product before the reader reached the
+list, which on a big night was most of the message. It is now one line that
+names none of them, and the bulleted list carries everything.
+
+Regions are gone. Units and states are what a reader acts on; "mostly West"
+told them nothing they could use.
+
+The degradation ladder changed with it. Full is one bullet per product with
+price, units and states. Too long drops to name and price. Too long again
+keeps as many names as fit and ends with "and N more", rather than silently
+cutting the bottom off the list.
+
+### Name shortening for BestBuy titles
+
+BestBuy writes titles the draws never see, so several were coming through at
+full length:
+
+- `Mega Evolution—Delta Reign Elite Trainer Box` kept its series prefix. The
+  prefix is stripped only when a dash follows it, because the base Mega
+  Evolution set's own products carry the name with nothing after it.
+- `(1 Ultra-Premium Collection per Order)` survived: the old rule matched the
+  Ex Box wording alone. Any `(1 ... per Order)` is dropped now, since the post
+  states the cap anyway.
+- `Ultra-Premium Collection` never became UPC, because the shortener only
+  knows the spaced spelling. The hyphen is normalised first.
+- `Mewto` is BestBuy's own typo and is corrected to Mewtwo.
+
+The shortener now runs over the naming step's `postName` as well as the raw
+title, so a long name from naming gets trimmed instead of passing straight
+through.

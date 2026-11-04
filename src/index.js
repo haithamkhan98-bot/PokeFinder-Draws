@@ -22,7 +22,7 @@ import { scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost } from './
 import { isConnected as canvaConnected } from './canva.js';
 import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates, POST_HOUR } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
-import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun } from './db.js';
+import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun, recentBestbuyRuns } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 
 const {
@@ -860,6 +860,50 @@ async function bestbuyRetry(message) {
   }
 }
 
+/**
+ * `!bbruns` prints the last few digests exactly as the ticker sees them.
+ *
+ * The ticker claims the oldest run where posted_at is null, post_at has
+ * passed and attempts is under five. A silent morning with no alert means one
+ * of those three did not hold, and nothing else in the bot can show which.
+ */
+async function bestbuyRuns(message) {
+  try {
+    const runs = await recentBestbuyRuns(6);
+    if (!runs.length) { await message.reply('No BestBuy runs recorded at all.'); return; }
+
+    const now = DateTime.now();
+    const fmt = (d) => (d ? DateTime.fromJSDate(d).setZone('America/New_York').toFormat('LLL d h:mma') : '-');
+    const lines = runs.map((r) => {
+      const at = DateTime.fromJSDate(r.post_at);
+      const claimable = !r.posted_at && at <= now && r.attempts < 5;
+      return `${String(r.post_date).slice(0, 10)}  items ${String(r.items).padStart(2)}  `
+        + `due ${fmt(r.post_at).padEnd(13)} sent ${fmt(r.posted_at).padEnd(13)} `
+        + `tries ${r.attempts}  ${claimable ? '<- CLAIMABLE NOW' : ''}`;
+    });
+
+    const top = runs[0];
+    const at = DateTime.fromJSDate(top.post_at);
+    const why = top.posted_at
+      ? `already sent${top.message_id ? ' live' : ` as ${top.form ?? 'a dry run'}`}, so the ticker skips it. \`!bbresend\` reopens it.`
+      : at > now
+        ? `not due until ${fmt(top.post_at)}.`
+        : top.attempts >= 5
+          ? 'out of attempts. `!bbretry` resets the count.'
+          : top.items === 0
+            ? 'claimable, but it holds no items, so the digest would be empty. `!bbbackfill 100` fills it.'
+            : 'claimable right now. If nothing is posting, the ticker is not running: check the boot log for "bestbuy digests are ON".';
+
+    await message.reply(
+      `\`\`\`\n${lines.join('\n')}\n\`\`\`\n`
+      + `Newest run is ${why}`
+      + (top.error ? `\nLast error: ${top.error}` : ''),
+    );
+  } catch (err) {
+    await message.reply(`Could not read the runs: ${err.message}`);
+  }
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1091,6 +1135,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!bbretry$/i.test(content)) { await bestbuyRetry(message); return; }
 
+    if (/^!bbruns$/i.test(content)) { await bestbuyRuns(message); return; }
     if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
     if (/^!bbresend$/i.test(content)) { await bestbuyResend(message); return; }
 

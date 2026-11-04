@@ -418,6 +418,27 @@ export async function reopenBestbuyRun() {
   return rows[0];
 }
 
+/**
+ * The last few BestBuy runs with everything the ticker filters on.
+ *
+ * `claimDueBestbuyRun` takes the oldest run where posted_at is null, post_at
+ * has passed and attempts is under five. When a morning goes quiet with no
+ * alert at all, one of those three is the reason and this is the only way to
+ * see which.
+ */
+export async function recentBestbuyRuns(limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT r.id, r.post_date, r.post_at, r.posted_at, r.attempts, r.error, r.form,
+            r.message_id,
+            (SELECT count(*)::int FROM bestbuy_items i WHERE i.run_id = r.id) AS items
+       FROM bestbuy_runs r
+      ORDER BY r.post_date DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows;
+}
+
 /** The most recent fired draw run and the items it held. For `!drawrefresh`. */
 export async function latestDrawRun() {
   const { rows } = await pool.query(

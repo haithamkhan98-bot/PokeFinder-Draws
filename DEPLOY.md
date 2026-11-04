@@ -879,3 +879,44 @@ and wording only. I had said it would show both. It now builds both.
 Where the two accounts use the same words it prints one copy carrying both
 times, as `out (PF 4:50PM / CF 4:30PM)`. The two reminders whose wording
 differs between the accounts are printed twice, labelled by account.
+
+## The BestBuy digest needs BESTBUY_LIVE
+
+`BESTBUY_ENABLED=true` starts the ticker. It does not send anything. Sending
+is gated separately on `BESTBUY_LIVE=true`, so with the first set and the
+second missing the digest is built every morning, marked posted and never
+sent. The only sign is an alert in the test channel reading "BestBuy digest
+BUILT (dry run, nothing sent)" with the full text under it.
+
+Both variables are needed:
+
+- `BESTBUY_ENABLED=true` turns the feature on
+- `BESTBUY_LIVE=true` lets it post to the alerts channel
+
+### Recovering a digest a dry run ate
+
+A dry run marks the run posted so it is not rebuilt every minute. That also
+puts it out of reach of `!bbretry`, which only touches runs that never
+posted, so turning the flag on afterwards finds nothing to send.
+
+`!bbresend` reopens the most recent digest whatever its state, clearing the
+post and the attempt count so the ticker claims it again. It says what the
+run's previous state was, and warns when the digest genuinely did go out, so
+a live resend is a deliberate choice rather than an accident. It also refuses
+to be useful quietly: if `BESTBUY_LIVE` is still not true it says so instead
+of building a second dry run in silence.
+
+### A night the bot never saw
+
+Gateway events are not replayed, so a restart, deploy or permission change
+between the 1AM burst and the 7AM post loses the night: the embeds sit in the
+channel and nothing is banked. `!bbscan` only reads, which is why it could
+not show this.
+
+`!bbbackfill [1-100]` reads the same history and writes it. Each embed is
+dated by its own message rather than by the current time, so a 1AM embed is
+filed against that morning's 7AM slot. A slot that has passed makes the run
+due at once and the ticker sends within the minute.
+
+`!bbscan` also used to print only the first 10 parsed rows under an accurate
+count, which read as a parser miss. The cap is now 25.

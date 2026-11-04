@@ -22,7 +22,7 @@ import { scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost } from './
 import { isConnected as canvaConnected } from './canva.js';
 import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
-import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun } from './db.js';
+import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 
 const {
@@ -804,7 +804,7 @@ async function bestbuyScan(message, raw) {
         }
         if (item.error) { errors.push(`${item.title ?? '(no title)'}: ${item.error}`); continue; }
         matched += 1;
-        if (lines.length < 10) {
+        if (lines.length < 25) {
           lines.push(`${item.sku}  ${item.units} units / ${item.states} states  ${item.rawTitle.slice(0, 70)}`
             + (item.unknownStates.length ? `  [unmapped: ${item.unknownStates.join(', ')}]` : ''));
         }
@@ -844,6 +844,128 @@ async function bestbuyRetry(message) {
       : 'That run has already been posted.');
   } catch (err) {
     await message.reply(`Retry failed: ${err.message}`);
+  }
+}
+
+/**
+ * `!bbresend` reopens the latest digest so the ticker sends it again.
+ *
+ * For the case `!bbretry` cannot reach: a digest built while BESTBUY_LIVE was
+ * off is marked posted without anything leaving the bot, and only this can
+ * put it back in the queue.
+ */
+async function bestbuyResend(message) {
+  try {
+    const run = await reopenBestbuyRun();
+    if (!run) { await message.reply('There are no BestBuy digests to resend.'); return; }
+
+    const live = BESTBUY_LIVE === 'true';
+    const history = !run.posted_at
+      ? 'It had not been sent yet.'
+      : run.message_id
+        ? '**Careful: that digest already went out live, so members will see it twice.**'
+        : `It had only been built as a dry run (${run.form ?? 'no form recorded'}), so nothing reached members.`;
+
+    await message.reply(
+      `Reopened the ${run.post_date} digest. The ticker picks it up within a minute.\n`
+      + `${history}\n`
+      + (live
+        ? 'BESTBUY_LIVE is true, so this one goes to members.'
+        : '**BESTBUY_LIVE is still not true**, so this will build another dry run and send nothing. '
+          + 'Set it to true and redeploy first, then run this again.'),
+    );
+  } catch (err) {
+    await message.reply(`Resend failed: ${err.message}`);
+  }
+}
+
+/**
+ * `!bbbackfill [1-100]` banks Daily Summary embeds the bot never saw live.
+ *
+ * Gateway events are not replayed. A restart, a deploy or a permission fix
+ * between the 1AM burst and the 7AM post loses the whole night: the embeds sit
+ * in the channel and the database has nothing, so the ticker finds no run due
+ * and the morning passes in silence. `!bbscan` only reads. This writes.
+ *
+ * Each embed is dated by its own message rather than by now, so one posted at
+ * 1AM is filed against that morning's 7AM slot and not tomorrow's. A slot that
+ * has already passed makes the run due immediately and the ticker sends it
+ * within the minute.
+ */
+async function bestbuyBackfill(message, raw) {
+  if (!BESTBUY_CHANNEL_ID) {
+    await message.reply('BESTBUY_CHANNEL_ID is not set, so there is nothing to read.');
+    return;
+  }
+  const limit = Math.min(Math.max(parseInt(raw, 10) || 50, 1), 100);
+
+  try {
+    const channel = await client.channels.fetch(BESTBUY_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply(`Channel ${BESTBUY_CHANNEL_ID} is not a text channel the bot can read.`);
+      return;
+    }
+
+    const fetched = await channel.messages.fetch({ limit });
+    // Oldest first, so a product repeated during the night ends up holding its
+    // latest numbers rather than its first.
+    const ordered = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    const banked = [];
+    const slots = new Map();
+    const errors = [];
+    let embeds = 0;
+    let skipped = 0;
+    let late = 0;
+
+    for (const m of ordered) {
+      for (const embed of m.embeds ?? []) {
+        embeds += 1;
+        const item = parseSummaryEmbed(embed, { now: DateTime.fromMillis(m.createdTimestamp) });
+        if (item === null) { skipped += 1; continue; }
+        if (item.error) { errors.push(`${item.title ?? '(no title)'}: ${item.error}`); continue; }
+        try {
+          const res = await recordBestbuyItem({
+            postDate: item.postDate, postAt: item.postAt.toISO(), item,
+          });
+          if (res.late) late += 1;
+          banked.push(`${res.inserted ? '+' : '~'} ${item.sku}  ${String(item.units).padStart(5)}u  `
+            + item.rawTitle.slice(0, 52));
+          const slot = slots.get(item.postDate) ?? { n: 0, at: item.postAt };
+          slot.n += 1;
+          slots.set(item.postDate, slot);
+        } catch (err) {
+          errors.push(`${item.sku}: ${err.message}`);
+        }
+      }
+    }
+
+    const now = DateTime.now();
+    const slotLines = [...slots.entries()].map(([date, { n, at }]) => {
+      const when = at.setZone('America/New_York').toFormat('ccc LLL d, h:mma');
+      return `  ${date}: ${n} product(s), posts ${when}${at <= now ? ' (DUE NOW)' : ''}`;
+    });
+
+    await message.reply(
+      `Read the last ${fetched.size} message(s) in <#${BESTBUY_CHANNEL_ID}>.\n`
+      + `${embeds} embed(s): **${banked.length} banked**, ${skipped} not summaries, `
+      + `${errors.length} unreadable.`
+      + (slotLines.length ? `\n\nDigest slots:\n${slotLines.join('\n')}` : '')
+      + (late
+        ? `\n\n${late} of these belong to a digest that has already been sent. `
+          + 'Run `!bbretry` to send it again with them included.'
+        : '')
+      + (errors.length ? `\n\nUnreadable:\n${errors.slice(0, 5).join('\n')}` : '')
+      + (banked.length
+        ? `\n\nBanked:\n\`\`\`\n${banked.slice(0, 25).join('\n')}\n\`\`\``
+        : '\n\nNothing banked. If the embeds are there, `!bbscan` says why they were skipped.'),
+    );
+  } catch (err) {
+    await message.reply(
+      `Backfill failed: ${err.message}\n`
+      + 'A permissions error here means the bot cannot read the monitor channel, '
+      + 'which is also why nothing banks on its own.',
+    );
   }
 }
 
@@ -934,6 +1056,11 @@ client.on(Events.MessageCreate, async (message) => {
     if (bbscan) { await bestbuyScan(message, bbscan[1]); return; }
 
     if (/^!bbretry$/i.test(content)) { await bestbuyRetry(message); return; }
+
+    if (/^!bbresend$/i.test(content)) { await bestbuyResend(message); return; }
+
+    const bbfill = content.match(/^!bbbackfill(?:\s+(\d+))?$/i);
+    if (bbfill) { await bestbuyBackfill(message, bbfill[1]); return; }
 
     if (/^!drawrefresh$/i.test(content)) { await drawRefresh(message); return; }
 

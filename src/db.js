@@ -394,6 +394,30 @@ export async function pendingBestbuyRun() {
   return { ...rows[0], items: items.rows };
 }
 
+/**
+ * Reopen the most recent BestBuy digest so the ticker sends it again.
+ *
+ * `retryBestbuyRun` only touches runs that never posted, which leaves no way
+ * back from a dry run: it marks the run posted so it is not rebuilt every
+ * minute, and turning BESTBUY_LIVE on afterwards finds nothing left to send.
+ * This clears the post itself. The caller is handed the row as it stood, so
+ * it can warn when the digest really did reach members.
+ */
+export async function reopenBestbuyRun() {
+  const { rows } = await pool.query(
+    `SELECT id, post_date, post_at, posted_at, message_id, form
+       FROM bestbuy_runs ORDER BY post_date DESC LIMIT 1`,
+  );
+  if (!rows.length) return null;
+  await pool.query(
+    `UPDATE bestbuy_runs
+        SET posted_at = NULL, message_id = NULL, attempts = 0, error = NULL
+      WHERE id = $1`,
+    [rows[0].id],
+  );
+  return rows[0];
+}
+
 /** The most recent fired draw run and the items it held. For `!drawrefresh`. */
 export async function latestDrawRun() {
   const { rows } = await pool.query(

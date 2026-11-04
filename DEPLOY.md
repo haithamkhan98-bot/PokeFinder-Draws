@@ -940,3 +940,18 @@ The burst has been arriving from around midnight rather than 1AM. Nothing
 needed changing: an embed is filed against the next 7AM that has not passed,
 so anything from late evening through 6:59AM lands in that morning's digest
 and an 11:45PM embed shares a post with a 3AM one. The only cliff is 7AM.
+
+### Env flags are no longer exact string matches
+
+Every flag used to be compared against the literal string `true`, so
+`BESTBUY_LIVE=True`, `TRUE`, `1`, or a value with a stray space read as off,
+and the bot reported itself as off without saying why. This cost a morning.
+
+`true`, `1`, `yes` and `on` are all accepted now, in any case, with
+surrounding whitespace trimmed. The same change applies to `BESTBUY_ENABLED`,
+`QUEUE_ENABLED`, `QUEUE_LIVE`, `BUFFER_LIVE` and `BUFFER_LIVE_ANNOUNCEMENT`.
+
+A wrong variable NAME still cannot be guessed at, so the bot now shows what it
+reads instead of only its verdict. `!bbstatus` prints every BestBuy setting as
+this process sees it, including a name that is simply absent, and `!bbresend`
+quotes the value it read when it declines to go live.

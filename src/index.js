@@ -20,7 +20,7 @@ import { buildPosts, winsPost, buildDiscordPosts, itemBlock, orderedPokemon, ord
 import { startDiscordScheduler } from './discord-schedule.js';
 import { scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
-import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates } from './bestbuy.js';
+import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates, POST_HOUR } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
 import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
@@ -41,6 +41,18 @@ const {
   BESTBUY_ENABLED,
   BESTBUY_LIVE,
 } = process.env;
+
+/**
+ * Is an env flag on?
+ *
+ * These used to be compared against the exact string 'true', which cost a
+ * morning of BestBuy digests: BESTBUY_LIVE was set, but not to a value that
+ * matched, and the bot reported itself as off while saying nothing about why.
+ * Anything a person means by yes is accepted now, and `flagRaw` reports what
+ * was actually read so a mistyped NAME is visible too.
+ */
+export const flag = (v) => ['true', '1', 'yes', 'on'].includes(String(v ?? '').trim().toLowerCase());
+const flagRaw = (v) => (v === undefined ? 'not set' : `"${v}"`);
 
 // Discord only pings when given the role ID. The literal text "@PokeFinder+"
 // renders as plain text and notifies nobody.
@@ -227,7 +239,7 @@ const batcher = new Batcher({
           let overText = null;
           // Only when queue posting is live. While the queue is in drafts its
           // wording must not reach a real draw post.
-          const queued = QUEUE_LIVE === 'true' ? await queueRunOn(drawDate).catch(() => null) : null;
+          const queued = flag(QUEUE_LIVE) ? await queueRunOn(drawDate).catch(() => null) : null;
           if (queued?.items?.length) {
             overText = drawOverWithQueue({
               items: queued.items,
@@ -243,13 +255,13 @@ const batcher = new Batcher({
             startsAt: usable[0].startsAt,
             endsAt: usable[0].endsAt,
             imageUrl: drawImage.url,
-            asDraft: process.env.BUFFER_LIVE !== 'true',
+            asDraft: !flag(process.env.BUFFER_LIVE),
             // The announcement publishes immediately under BOTH flags. It has no
             // dueAt, so without this it would fall through to the Buffer queue
             // and wait for the next slot instead of going out now.
             liveSlots: new Set(
-              process.env.BUFFER_LIVE === 'true'
-                || process.env.BUFFER_LIVE_ANNOUNCEMENT === 'true' ? ['announcement'] : [],
+              flag(process.env.BUFFER_LIVE)
+                || flag(process.env.BUFFER_LIVE_ANNOUNCEMENT) ? ['announcement'] : [],
             ),
           });
         } catch (err) {
@@ -286,7 +298,7 @@ const batcher = new Batcher({
         + (suspect ? `\nWarnings:\n${suspect}` : '')
         + `\nPosts: ${publish
             ? `${publish.expected - publish.failed}/${publish.expected} created as `
-              + `${process.env.BUFFER_LIVE === 'true' ? 'scheduled posts' : 'drafts'}`
+              + `${flag(process.env.BUFFER_LIVE) ? 'scheduled posts' : 'drafts'}`
               + `${publish.naming.note ? ` (naming: ${publish.naming.note})` : ''}\n${summarise(publish)}`
             : publishError}`,
       );
@@ -387,13 +399,13 @@ const queueBatcher = new Batcher({
         // Queue posts have their own flag. BUFFER_LIVE is the draws' and is
         // already on; the queue stays in drafts until QUEUE_LIVE says
         // otherwise, so the first real run can be checked before it posts.
-        asDraft: QUEUE_LIVE !== 'true',
-        publishAnnouncement: QUEUE_LIVE === 'true',
+        asDraft: !flag(QUEUE_LIVE),
+        publishAnnouncement: flag(QUEUE_LIVE),
       });
 
       await alert(
         `**Queue run ready** ${dropDate} (fired on ${reason}, run #${res.runId})\n`
-        + (QUEUE_LIVE === 'true' ? '' : 'DRAFTS ONLY. Nothing is scheduled or published and the '
+        + (flag(QUEUE_LIVE) ? '' : 'DRAFTS ONLY. Nothing is scheduled or published and the '
           + 'draw closing post was not touched. Set QUEUE_LIVE=true to go live.\n')
         + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
         + `Headline (${report.headline.source}): ${report.headline.headline}\n`
@@ -848,6 +860,26 @@ async function bestbuyRetry(message) {
   }
 }
 
+/** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
+async function bestbuyStatus(message) {
+  const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
+  await message.reply(
+    '```\n'
+    + `${line('BESTBUY_ENABLED', BESTBUY_ENABLED, flag(BESTBUY_ENABLED))}\n`
+    + `${line('BESTBUY_LIVE   ', BESTBUY_LIVE, flag(BESTBUY_LIVE))}\n`
+    + `     BESTBUY_CHANNEL_ID       = ${BESTBUY_CHANNEL_ID ?? 'not set'}\n`
+    + `     BESTBUY_ALERT_CHANNEL_ID = ${BESTBUY_ALERT_CHANNEL_ID ?? 'not set'}\n`
+    + `     BESTBUY_CHECKER_CHANNEL_ID = ${BESTBUY_CHECKER_CHANNEL_ID ?? 'not set'}\n`
+    + `     post hour (ET)           = ${POST_HOUR}\n`
+    + '```\n'
+    + (flag(BESTBUY_ENABLED) && flag(BESTBUY_LIVE)
+      ? 'Digests are on and will post to members.'
+      : !flag(BESTBUY_ENABLED)
+        ? 'The ticker is not running. BESTBUY_ENABLED must be true.'
+        : 'The ticker runs but sends nothing. BESTBUY_LIVE must be true.'),
+  );
+}
+
 /**
  * `!bbresend` reopens the latest digest so the ticker sends it again.
  *
@@ -860,7 +892,7 @@ async function bestbuyResend(message) {
     const run = await reopenBestbuyRun();
     if (!run) { await message.reply('There are no BestBuy digests to resend.'); return; }
 
-    const live = BESTBUY_LIVE === 'true';
+    const live = flag(BESTBUY_LIVE);
     const history = !run.posted_at
       ? 'It had not been sent yet.'
       : run.message_id
@@ -872,8 +904,9 @@ async function bestbuyResend(message) {
       + `${history}\n`
       + (live
         ? 'BESTBUY_LIVE is true, so this one goes to members.'
-        : '**BESTBUY_LIVE is still not true**, so this will build another dry run and send nothing. '
-          + 'Set it to true and redeploy first, then run this again.'),
+        : `**This will build another dry run and send nothing.** This process reads `
+          + `BESTBUY_LIVE as ${flagRaw(BESTBUY_LIVE)}. It must be the name in capitals and a `
+          + 'value of true, 1, yes or on. Fix it in Railway, wait for the redeploy, then run this again.'),
     );
   } catch (err) {
     await message.reply(`Resend failed: ${err.message}`);
@@ -1058,6 +1091,7 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!bbretry$/i.test(content)) { await bestbuyRetry(message); return; }
 
+    if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
     if (/^!bbresend$/i.test(content)) { await bestbuyResend(message); return; }
 
     const bbfill = content.match(/^!bbbackfill(?:\s+(\d+))?$/i);
@@ -1072,7 +1106,7 @@ client.on(Events.MessageCreate, async (message) => {
   // channel and publish at 7AM, so nothing happens here beyond banking them
   // against the morning they belong to.
   if (BESTBUY_CHANNEL_ID && message.channelId === BESTBUY_CHANNEL_ID) {
-    if (BESTBUY_ENABLED !== 'true') return;
+    if (!flag(BESTBUY_ENABLED)) return;
     for (const embed of message.embeds ?? []) {
       let item;
       try {
@@ -1126,7 +1160,7 @@ client.on(Events.MessageCreate, async (message) => {
     if (item === null) {
       // Not a draw. It may still be a queue item from the Droplist monitor,
       // which posts to this same channel.
-      if (QUEUE_ENABLED !== 'true') continue;
+      if (!flag(QUEUE_ENABLED)) continue;
       let q;
       try {
         q = parseQueueEmbed(embed, { now: DateTime.now() });
@@ -1179,17 +1213,17 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('DISCORD_MEMBER_CHANNEL_ID is not set, so no member draw posts will be sent');
   }
-  console.log(QUEUE_ENABLED === 'true'
-    ? `queue monitoring is ON, posting ${QUEUE_LIVE === 'true' ? 'LIVE' : 'to DRAFTS only'}`
+  console.log(flag(QUEUE_ENABLED)
+    ? `queue monitoring is ON, posting ${flag(QUEUE_LIVE) ? 'LIVE' : 'to DRAFTS only'}`
     : 'queue monitoring is OFF, set QUEUE_ENABLED=true to turn it on');
 
-  if (BESTBUY_ENABLED === 'true' && BESTBUY_CHANNEL_ID && BESTBUY_ALERT_CHANNEL_ID) {
+  if (flag(BESTBUY_ENABLED) && BESTBUY_CHANNEL_ID && BESTBUY_ALERT_CHANNEL_ID) {
     startBestbuyScheduler(client, {
       channelId: BESTBUY_ALERT_CHANNEL_ID,
       role: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
       checkerChannel: BESTBUY_CHECKER_CHANNEL_ID
         ? `<#${BESTBUY_CHECKER_CHANNEL_ID}>` : '#bestbuy-instore-check',
-      live: BESTBUY_LIVE === 'true',
+      live: flag(BESTBUY_LIVE),
       onError: alert,
       onPosted: async ({ run, digest, dryRun, skipped }) => {
         if (skipped) {
@@ -1206,7 +1240,7 @@ client.once(Events.ClientReady, (c) => {
       },
     });
     console.log(`bestbuy digests are ON, reading ${BESTBUY_CHANNEL_ID}, posting `
-      + `${BESTBUY_LIVE === 'true' ? 'LIVE' : 'as a DRY RUN'} to ${BESTBUY_ALERT_CHANNEL_ID}`);
+      + `${flag(BESTBUY_LIVE) ? 'LIVE' : 'as a DRY RUN'} to ${BESTBUY_ALERT_CHANNEL_ID}`);
   } else {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }

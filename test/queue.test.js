@@ -305,6 +305,17 @@ test('the late queue draft carries a link per product and ends at the ad tag', (
 
 import { resolveLink, isAffiliateLink, isBlockedLink } from '../src/parse.js';
 
+test('repacks and mystery boxes are excluded from the queue, same as draws', () => {
+  for (const t of ['Pokemon Mystery Power Box', 'Pokémon TCG Repack Box', 'Mystery Pack Bundle']) {
+    assert.equal(classifyQueue(t), 'excluded', t);
+  }
+  // The queue's own exclusions still apply.
+  assert.equal(classifyQueue('2026 Upper Deck Hockey Blaster'), 'excluded');
+  assert.equal(classifyQueue('NCAA College Football Mega Box'), 'excluded');
+  // And a real product is untouched.
+  assert.equal(classifyQueue('Pokemon TCG: Delta Reign Elite Trainer Box'), 'pokemon');
+});
+
 // The monitor can be set to make each embed's title link an affiliate link.
 // When it has been, that link beats anything the bot could reconstruct.
 test('an affiliate link on the embed is used as is', () => {

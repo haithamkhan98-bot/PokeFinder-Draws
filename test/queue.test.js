@@ -303,7 +303,7 @@ test('the late queue draft carries a link per product and ends at the ad tag', (
   assert.ok(text.endsWith('#Pokemon #ad'));
 });
 
-import { resolveLink, isAffiliateLink } from '../src/parse.js';
+import { resolveLink, isAffiliateLink, isBlockedLink } from '../src/parse.js';
 
 // The monitor can be set to make each embed's title link an affiliate link.
 // When it has been, that link beats anything the bot could reconstruct.
@@ -325,6 +325,26 @@ test('a plain Walmart link falls back to the PokeFinder form', () => {
 test('a missing or broken embed link still produces a usable link', () => {
   assert.equal(resolveLink({ sourceUrl: null, pid: '123' }).link, 'https://www.walmart.com/ip/PokeFinder/123');
   assert.equal(resolveLink({ sourceUrl: 'not a url', pid: '123' }).affiliate, false);
+});
+
+test('a zephyr link is somebody else\'s, so it falls back to the plain link', () => {
+  // On an affiliate host, so the host check alone would have accepted it.
+  const zephyr = 'https://howl.link/zephyr-abc123';
+  assert.ok(isBlockedLink(zephyr));
+  assert.equal(isAffiliateLink(zephyr), false);
+  assert.deepEqual(
+    resolveLink({ sourceUrl: zephyr, pid: '20413908978' }),
+    { link: 'https://www.walmart.com/ip/PokeFinder/20413908978', affiliate: false },
+  );
+});
+
+test('zephyr is matched anywhere in the url and case insensitively', () => {
+  assert.ok(isBlockedLink('https://zephyr.howl.link/abc'));
+  assert.ok(isBlockedLink('https://howl.link/abc?src=ZEPHYR'));
+  assert.ok(isBlockedLink('https://howl.link/Zephyr/abc'));
+  // Our own links are untouched.
+  assert.equal(isBlockedLink('https://howl.link/r5frrzi6qe8hx'), false);
+  assert.ok(isAffiliateLink('https://howl.link/r5frrzi6qe8hx'));
 });
 
 test('the embed link flows through to the potential queue draft', () => {

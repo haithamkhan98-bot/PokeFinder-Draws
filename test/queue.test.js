@@ -139,7 +139,7 @@ test('the queue posts carry the link once and end at the ad tag', () => {
     headline: 'Pokemon 30th Celebration Elite Trainer Boxes',
     now: et('2026-10-27T20:30'),
   });
-  assert.deepEqual(posts.map((p) => p.slot), ['announcement', 'fifteen_minutes', 'going_live']);
+  assert.deepEqual(posts.map((p) => p.slot), ['announcement', 'one_hour', 'going_live']);
   for (const p of posts) {
     assert.equal((p.text.match(/howl\.link\/ffngiff7nu8la/g) || []).length, 1);
     assert.ok(p.text.endsWith('#Pokemon #ad'));
@@ -155,7 +155,7 @@ test('queue posts are anchored to the drop, not to when they were written', () =
     now: et('2026-10-27T20:30'),
   });
   const at = (slot) => posts.find((p) => p.slot === slot).dueAt.setZone('America/New_York').toFormat('ccc HH:mm');
-  assert.equal(at('fifteen_minutes'), 'Wed 20:45');
+  assert.equal(at('one_hour'), 'Wed 20:00');
   assert.equal(at('going_live'), 'Wed 20:59');
 });
 
@@ -505,7 +505,7 @@ test('the 15 minute reminder reads as a reminder, the go live post does not', ()
     now: et('2026-10-27T20:30'),
   });
   const text = (slot) => posts.find((p) => p.slot === slot).text;
-  assert.match(text('fifteen_minutes'), /^💫 Reminder: 30th Celebration Going Live on Walmart in 15 Minutes!/);
+  assert.match(text('one_hour'), /^💫 Reminder: 30th Celebration Going Live on Walmart in 1 Hour!/);
   assert.match(text('going_live'), /^💫 30th Celebration Going Live on Walmart Now!/);
   assert.ok(!posts.some((p) => p.slot === 'morning'));
 });

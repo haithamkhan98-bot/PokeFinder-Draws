@@ -98,12 +98,13 @@ export function buildQueuePosts({ items, dropAt, headline, now }) {
       ),
     },
     {
-      // A quarter of an hour out, matching the draws' own minutes-out reminder
-      // wording. There is no 9AM post: a queue drop is announced the night
-      // before and reminded twice on the night, not through the day.
-      slot: 'fifteen_minutes',
-      dueAt: et.minus({ minutes: 15 }),
-      text: body(`💫 Reminder: ${headline} Going Live on Walmart in 15 Minutes!`),
+      // An hour out. Fifteen minutes put this on top of the go-live post one
+      // minute before the drop, which read as one message sent twice. There is
+      // no 9AM post: a queue drop is announced the night before and reminded
+      // twice on the night, not through the day.
+      slot: 'one_hour',
+      dueAt: et.minus({ hours: 1 }),
+      text: body(`💫 Reminder: ${headline} Going Live on Walmart in 1 Hour!`),
     },
     {
       // One minute before the drop, matching the draw framework.

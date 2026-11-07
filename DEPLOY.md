@@ -591,7 +591,7 @@ Three tweets, all to CollectFinder:
 | slot | when |
 | --- | --- |
 | announcement | immediately, published |
-| fifteen_minutes | 8:45PM on drop day |
+| one_hour | 8:00PM on drop day |
 | going_live | 8:59PM on drop day |
 
 There is no 9AM reminder. A queue drop is announced the night before and

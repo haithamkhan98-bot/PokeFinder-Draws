@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { parsePrice, suggestName, isNowLive, resolveLink, NOT_CARDS } from './parse.js';
+import { parsePrice, suggestName, isNowLive, resolveLink, NOT_CARDS, REPACKS } from './parse.js';
 
 export const QUEUE_AUTHOR = 'Walmart Droplist';
 
@@ -31,7 +31,10 @@ export function nextDropAt(now = DateTime.now()) {
 }
 
 // Upper Deck and College products never appear in PokeFinder content.
-const EXCLUDE = [/\bupper\s*deck\b/i, /\bcollege\b/i, /\bncaa\b/i];
+// Queue-only exclusions, on top of the shared repack list. REPACKS comes from
+// the draw path so the two can never disagree about what is a repack: before
+// this, a Mystery Power Box was dropped from a draw and published in a queue.
+const EXCLUDE = [/\bupper\s*deck\b/i, /\bcollege\b/i, /\bncaa\b/i, ...REPACKS];
 
 const GAMES = [
   ['pokemon', [/\bpok[eé]mon\b/i, /\bpokemon\b/i, /\bptcg\b/i]],

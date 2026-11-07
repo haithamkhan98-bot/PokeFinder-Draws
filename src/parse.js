@@ -17,7 +17,10 @@ const MONTHS = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov
 // "Oct 26, 2:00pm - 3:00pm PDT"
 const TIME_RE = /^([A-Za-z]{3,9})\s+(\d{1,2}),\s*(\d{1,2}):(\d{2})\s*([ap]m)\s*[-–—to]+\s*(\d{1,2}):(\d{2})\s*([ap]m)\s*([A-Z]{3,4})$/i;
 
-const EXCLUDE = [
+// Repacks and mystery boxes never belong in PokeFinder content, draws or
+// queue. Exported so the queue path applies exactly this list rather than
+// keeping a second copy that can drift.
+export const REPACKS = [
   /\brepack\b/i, /\bmystery\s*(power\s*)?box\b/i, /\bmystery\s*pack\b/i,
 ];
 
@@ -109,7 +112,7 @@ export function classify(title) {
   const t = title ?? '';
   // Merchandise is tested before the games, or a Pokemon branded plush or
   // figure would be taken for a postable Pokemon card product.
-  if (EXCLUDE.some((re) => re.test(t))) return 'excluded';
+  if (REPACKS.some((re) => re.test(t))) return 'excluded';
   if (NOT_CARDS.some((re) => re.test(t))) return 'excluded';
   if (POKEMON.some((re) => re.test(t))) return 'pokemon';
   if (ONE_PIECE.some((re) => re.test(t))) return 'onepiece';

@@ -54,7 +54,7 @@ A healthy boot looks like this:
 ```
 database schema is up to date
 listening as YourBotName#1234 on channel 1366430736877355098
-quiet period 300s, ceiling 1200s
+quiet period 300s (queue 300s), ceiling 1200s
 ```
 
 If you see all three lines, it is done. It will now sit quietly until the next
@@ -277,6 +277,24 @@ QUIET_PERIOD_MS=30000
 
 That is 30 seconds. If the monitor posts every item for a draw in one burst,
 30 seconds of silence is ample evidence the draw is complete.
+
+This one is the DRAW period. It also covers the late "Potential WM Droplist"
+queue, which is announced 10 to 20 minutes before the drop and so has to stay
+fast for the same reason.
+
+The standard queue has its own, set separately:
+
+```
+QUEUE_QUIET_PERIOD_MS=300000
+```
+
+Default 5 minutes. Do not shorten this one to match the draws. A draw is a
+race and you want the announcement out first. A queue drop is announced the
+night before, so there is nothing to race, and Droplist embeds are the less
+consistent of the two monitors: they can trickle rather than arrive in one
+burst. Firing early on a queue means publishing a post that is missing items,
+and the stragglers then hit the amend path, which writes nothing and asks for
+the run to be handled by hand.
 
 ### 2. Publish the announcement automatically
 

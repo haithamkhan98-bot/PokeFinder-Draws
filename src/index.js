@@ -31,6 +31,12 @@ const {
   ALERT_CHANNEL_ID,
   QUIET_PERIOD_MS = 300_000,
   CEILING_MS = 1_200_000,
+  // The queue gets its own, longer quiet period. A draw is a race, so that one
+  // runs short to get the announcement out first. A queue drop is announced the
+  // night before, so there is nothing to race: waiting longer to be sure every
+  // Droplist embed has landed costs nothing, and firing early now means a
+  // PUBLISHED post missing items, with the stragglers hitting the amend path.
+  QUEUE_QUIET_PERIOD_MS = 300_000,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -354,12 +360,13 @@ const batcher = new Batcher({
 /**
  * The queue batcher.
  *
- * Separate from the draw batcher because the two are grouped on different
- * keys and produce different output, but the batching behaviour is identical:
- * queue embeds also land in one burst.
+ * Separate from the draw batcher because the two are grouped on different keys,
+ * produce different output, and wait for different lengths of time. Droplist
+ * embeds are less consistent than draw embeds and can trickle in rather than
+ * arrive in one burst, so this one waits QUEUE_QUIET_PERIOD_MS.
  */
 const queueBatcher = new Batcher({
-  quietMs: Number(QUIET_PERIOD_MS),
+  quietMs: Number(QUEUE_QUIET_PERIOD_MS),
   ceilingMs: Number(CEILING_MS),
   keyOf: (item) => item.dropDate,
   onLate: async ({ drawDate, item }) => {
@@ -451,6 +458,8 @@ const queueBatcher = new Batcher({
  * and must never be mixed into a standard run that may already have fired.
  */
 const potentialBatcher = new Batcher({
+  // Deliberately the SHORT draw period, not the queue's. These are announced
+  // 10 to 20 minutes before the drop, so a long wait would miss the window.
   quietMs: Number(QUIET_PERIOD_MS),
   ceilingMs: Number(CEILING_MS),
   keyOf: (item) => `potential-${item.dropDate}`,
@@ -1289,7 +1298,11 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }
-  console.log(`quiet period ${Number(QUIET_PERIOD_MS) / 1000}s, ceiling ${Number(CEILING_MS) / 1000}s`);
+  console.log(
+    `quiet period ${Number(QUIET_PERIOD_MS) / 1000}s`
+    + ` (queue ${Number(QUEUE_QUIET_PERIOD_MS) / 1000}s)`
+    + `, ceiling ${Number(CEILING_MS) / 1000}s`,
+  );
 });
 
 async function shutdown(signal) {

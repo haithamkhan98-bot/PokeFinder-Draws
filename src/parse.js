@@ -155,7 +155,29 @@ export const AFFILIATE_HOSTS = (process.env.AFFILIATE_HOSTS
   || 'howl.link,mavely.app.link,go.magik.ly,shopmy.us')
   .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
 
+/**
+ * Substrings that mark a link as somebody else's.
+ *
+ * A Droplist embed sometimes carries a link containing "zephyr". It sits on an
+ * affiliate host, so the host check alone accepts it, but it is not our link:
+ * publishing it credits someone else for the sale. Treat it as no link at all
+ * and fall back to the plain PokeFinder form.
+ *
+ * Matched anywhere in the URL, not just the hostname, because these turn up as
+ * a path segment or a query parameter as well as a subdomain.
+ */
+export const AFFILIATE_BLOCKLIST = (process.env.AFFILIATE_BLOCKLIST || 'zephyr')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+export function isBlockedLink(url) {
+  const u = String(url ?? '').toLowerCase();
+  return AFFILIATE_BLOCKLIST.some((s) => u.includes(s));
+}
+
 export function isAffiliateLink(url) {
+  // The blocklist is checked here rather than in resolveLink so that every
+  // caller is covered, now and later.
+  if (isBlockedLink(url)) return false;
   try {
     return AFFILIATE_HOSTS.some((h) => new URL(url).hostname.toLowerCase().endsWith(h));
   } catch {

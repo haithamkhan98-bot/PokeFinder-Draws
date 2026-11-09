@@ -24,6 +24,7 @@ import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates, P
 import { bestbuyDigest } from './bestbuy-copy.js';
 import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun, recentBestbuyRuns } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
+import { probeListing, formatProbe } from './target.js';
 
 const {
   DISCORD_TOKEN,
@@ -913,6 +914,43 @@ async function bestbuyRuns(message) {
   }
 }
 
+/**
+ * `!targetprobe <tcin> [...]` reads Target listings from this service and
+ * reports exactly what came back.
+ *
+ * The Target raffle automation wants to re-check listings so a reminder can
+ * drop items Target pulled mid draw. Whether Target will serve those pages to
+ * Railway at all is unknown: it blocks plenty of automated reads, and this is
+ * a datacenter address. Rather than assume either way, this answers it with
+ * evidence before the feature is built on top of the assumption.
+ */
+async function targetProbe(message, rest) {
+  const tcins = (rest ?? '').split(/[\s,]+/).map((t) => t.trim()).filter(Boolean).slice(0, 5);
+  if (!tcins.length) {
+    await message.reply('Give me at least one TCIN, for example `!targetprobe 1011407490`.');
+    return;
+  }
+
+  await message.reply(`Reading ${tcins.length} listing${tcins.length === 1 ? '' : 's'} from Target, one at a time.`);
+
+  const blocks = [];
+  for (const tcin of tcins) {
+    // Serially, not in parallel: a burst is the quickest way to get walled,
+    // and this is meant to measure the normal case.
+    blocks.push(formatProbe(await probeListing(tcin)));
+  }
+
+  let chunk = '';
+  for (const b of blocks) {
+    if (chunk && chunk.length + b.length > 1800) {
+      await message.channel.send(`\`\`\`\n${chunk}\n\`\`\``);
+      chunk = '';
+    }
+    chunk = chunk ? `${chunk}\n${'-'.repeat(40)}\n${b}` : b;
+  }
+  if (chunk) await message.channel.send(`\`\`\`\n${chunk}\n\`\`\``);
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1146,6 +1184,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!bbruns$/i.test(content)) { await bestbuyRuns(message); return; }
     if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
+
+    const tprobe = content.match(/^!targetprobe\b(.*)$/i);
+    if (tprobe) { await targetProbe(message, tprobe[1]); return; }
     if (/^!bbresend$/i.test(content)) { await bestbuyResend(message); return; }
 
     const bbfill = content.match(/^!bbbackfill(?:\s+(\d+))?$/i);

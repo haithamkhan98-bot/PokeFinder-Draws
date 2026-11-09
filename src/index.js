@@ -1339,6 +1339,9 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }
+  if (publicBaseUrl()) {
+    console.log(`target close bookmarklet: ${publicBaseUrl()}/target/bookmarklet?key=${setupKey}`);
+  }
   console.log(
     `quiet period ${Number(QUIET_PERIOD_MS) / 1000}s`
     + ` (queue ${Number(QUEUE_QUIET_PERIOD_MS) / 1000}s)`

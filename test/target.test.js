@@ -58,3 +58,35 @@ test('a 403 reads as refused, not as a missing flag', async () => {
   const r = await probeListing('123', { fetchImpl });
   assert.match(formatProbe(r), /REFUSED: HTTP 403/);
 });
+
+import { nearTermTimes } from '../src/target.js';
+
+test('nearTermTimes finds epoch milliseconds, which an ISO-only search misses', () => {
+  const now = Date.parse('2026-11-09T16:00:00Z');
+  const soon = now + 3 * 86_400_000;
+  const html = `{"drawingEndTime":${soon},"other":1}`;
+  const hits = nearTermTimes(html, { now });
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].context, /drawingEndTime/);
+});
+
+test('nearTermTimes finds ISO strings too', () => {
+  const now = Date.parse('2026-11-09T16:00:00Z');
+  const html = '{"endsAt":"2026-11-12T23:59:00.000Z"}';
+  const hits = nearTermTimes(html, { now });
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].context, /endsAt/);
+});
+
+test('nearTermTimes drops the far-future content expiry noise', () => {
+  const now = Date.parse('2026-11-09T16:00:00Z');
+  // These are what actually litter a Target page.
+  const html = '"2027-07-29T04:59:59.999Z" "2028-01-01T05:59:59.999Z" 1893456000000';
+  assert.deepEqual(nearTermTimes(html, { now }), []);
+});
+
+test('nearTermTimes ignores long digit runs that merely contain 13 digits', () => {
+  const now = Date.parse('2026-11-09T16:00:00Z');
+  const soon = String(now + 86_400_000);
+  assert.equal(nearTermTimes(`"id":"999${soon}999"`, { now }).length, 0);
+});

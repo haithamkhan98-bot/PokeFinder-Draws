@@ -486,6 +486,7 @@ const targetBatcher = new Batcher({
         // reading in Buffer; a Discord ping cannot be taken back.
         discordChannelId: flag(TARGET_LIVE) ? (DISCORD_MEMBER_CHANNEL_ID ?? null) : null,
         discordRole: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
+        reddit: flag(REDDIT_ENABLED),
       });
 
       await alert(
@@ -1549,6 +1550,7 @@ function startTargetTicker() {
         asDraft: !flag(TARGET_LIVE),
         discordChannelId: flag(TARGET_LIVE) ? (DISCORD_MEMBER_CHANNEL_ID ?? null) : null,
         discordRole: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
+        reddit: flag(REDDIT_ENABLED),
         alert,
       });
       for (const d of did) {

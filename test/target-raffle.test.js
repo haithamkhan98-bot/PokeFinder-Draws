@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
 import { isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems } from '../src/target-raffle.js';
-import { buildRafflePosts, raffleItemLines } from '../src/target-copy.js';
+import { buildRafflePosts, raffleItemLines, closeLine } from '../src/target-copy.js';
 
 const now = DateTime.fromISO('2026-11-09T11:00', { zone: 'America/New_York' });
 
@@ -97,4 +97,34 @@ test('the morning reminder is skipped when it lands inside the final hour', () =
   const closesAt = now.plus({ days: 1 }).set({ hour: 9, minute: 30 });
   const posts = buildRafflePosts({ items: [{ postName: 'A', link: 'x' }], now, closesAt });
   assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
+});
+
+const SAMPLE = [parseTargetRaffle(embed(), { now })];
+
+test('every beat states the deadline, which is why the close time is collected', () => {
+  // Target writes its copy in Central ("Enter by 10am CT"), so the posts have
+  // to come out as 11AM Eastern.
+  const closesAt = DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' });
+  const posts = buildRafflePosts({ items: SAMPLE, now, closesAt });
+
+  assert.equal(posts.length, 3);
+  for (const p of posts) {
+    assert.match(p.text, /⏰ Enter by 11AM EST \/ 8AM PST on Wed 11\/11/, `${p.slot} states the deadline`);
+  }
+});
+
+test('without a close time the announcement still goes out, with no deadline line', () => {
+  const posts = buildRafflePosts({ items: SAMPLE, now, closesAt: null });
+  assert.deepEqual(posts.map((p) => p.slot), ['live']);
+  assert.doesNotMatch(posts[0].text, /Enter by/);
+  assert.doesNotMatch(posts[0].text, /⏰/, 'no empty deadline marker is left behind');
+});
+
+test('closeLine crosses a DST boundary by zone rather than by offset', () => {
+  // 2026 DST ends Nov 1. A draw closing either side must name the right hour.
+  const before = closeLine(DateTime.fromISO('2026-10-28T10:00', { zone: 'America/Chicago' }));
+  const after = closeLine(DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' }));
+  assert.match(before, /11AM EST \/ 8AM PST/);
+  assert.match(after, /11AM EST \/ 8AM PST/);
+  assert.equal(closeLine(null), null);
 });

@@ -1,4 +1,4 @@
-import { orderedItems, orderedSets, joinEnglish } from './copy.js';
+import { orderedItems, orderedSets, joinEnglish, timeLabel, shortDate } from './copy.js';
 
 /**
  * Copy for Target raffles.
@@ -21,6 +21,23 @@ export function raffleHeadline(items) {
   return sets.length ? joinEnglish(orderedSets(sets)) : 'Pokemon';
 }
 
+/**
+ * The deadline, in the house format the draw posts already use.
+ *
+ * This is the whole reason the close time is collected by hand at all. A
+ * Target draw runs for days, so unlike a Walmart draw the thing a reader needs
+ * is not when it starts but when it stops, and a post that says "live now"
+ * without a deadline leaves them to work it out on the listing page.
+ *
+ * Both zones and the weekday are stated. A draw that opens on Monday and
+ * closes on Wednesday makes a bare clock time ambiguous.
+ */
+export function closeLine(closesAt) {
+  if (!closesAt) return null;
+  const et = closesAt.setZone('America/New_York');
+  return `⏰ Enter by ${timeLabel(closesAt)} on ${et.toFormat('ccc')} ${shortDate(closesAt)}`;
+}
+
 /** One line per item: name then its own entry link. */
 export function raffleItemLines(items) {
   return orderedItems(items)
@@ -29,6 +46,25 @@ export function raffleItemLines(items) {
 }
 
 const body = (...blocks) => blocks.filter(Boolean).join('\n\n');
+
+/**
+ * 9AM the morning after a draw opens, or null when that is not a sensible
+ * moment to say anything.
+ *
+ * Skipped when it lands after the close, or inside the final hour, since the
+ * closing post already covers that stretch and two posts minutes apart read
+ * as one message sent twice.
+ *
+ * Exported so the ticker and the copy agree on when it is. Two separate
+ * calculations would drift, and the symptom would be a reminder that is never
+ * built or one built twice.
+ */
+export function morningReminderAt(openedAt, closesAt) {
+  if (!closesAt) return null;
+  const morning = openedAt.setZone('America/New_York').plus({ days: 1 })
+    .set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
+  return morning < closesAt.minus({ hours: 1 }) ? morning : null;
+}
 
 /**
  * The three beats.
@@ -50,20 +86,18 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'live',
     dueAt: null,
     discord: true,
-    text: body(`💫 Target ${headline} Draws Are Live Now!`, list, BOOKMARK, TAGS),
+    text: body(`💫 Target ${headline} Draws Are Live Now!`, list, closeLine(closesAt), BOOKMARK, TAGS),
   });
 
   if (!closesAt) return posts;
 
-  const morning = now.setZone('America/New_York').plus({ days: 1 }).set({
-    hour: 9, minute: 0, second: 0, millisecond: 0,
-  });
-  if (morning < closesAt.minus({ hours: 1 })) {
+  const morning = morningReminderAt(now, closesAt);
+  if (morning) {
     posts.push({
       slot: 'morning',
       dueAt: morning,
       discord: false,
-      text: body(`💫 Reminder: The Target ${headline} Draws Are Still Open!`, list, BOOKMARK, TAGS),
+      text: body(`💫 Reminder: The Target ${headline} Draws Are Still Open!`, list, closeLine(closesAt), BOOKMARK, TAGS),
     });
   }
 
@@ -71,7 +105,7 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'closing',
     dueAt: closesAt.minus({ hours: 1 }),
     discord: true,
-    text: body(`💫 1 Hour Left to Enter the Target ${headline} Draws!`, list, TAGS),
+    text: body(`💫 1 Hour Left to Enter the Target ${headline} Draws!`, list, closeLine(closesAt), TAGS),
   });
 
   return posts;

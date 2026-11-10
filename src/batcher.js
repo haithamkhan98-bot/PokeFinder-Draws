@@ -21,6 +21,14 @@ export class Batcher {
     // are queueing for. Everything else about the batching is identical.
     keyOf = (item) => item.drawDate,
   } = {}) {
+    // Guarded because a batcher with no callback is silent, not broken: the
+    // quiet timer elapses, the run is marked fired, and nothing happens. The
+    // Target batcher shipped with `onFlush` instead of `onFire` and collected
+    // three live raffle listings into a run that produced no posts and no log
+    // line. A typo in an option name should not cost a draw.
+    if (typeof onFire !== 'function') {
+      throw new Error('Batcher needs an onFire callback; without one every run fires into nothing');
+    }
     this.quietMs = quietMs;
     this.ceilingMs = ceilingMs;
     this.lateWindowMs = lateWindowMs;

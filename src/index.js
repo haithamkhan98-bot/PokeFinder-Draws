@@ -449,7 +449,7 @@ const targetBatcher = new Batcher({
     await alert(`Target raffle listing arrived after the run fired: ${item.productName} (${item.tcin}). `
       + 'It has joined the open run and will appear in the next reminder.');
   },
-  onFlush: async ({ items, reason }) => {
+  onFire: async ({ items, reason }) => {
     try {
       const usable = usableRaffleItems(items);
       const dropped = items.filter((i) => i.classification === 'excluded');

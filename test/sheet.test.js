@@ -269,3 +269,55 @@ test('a short alert stays one message', () => {
   assert.equal(splitAlert(missingLinksAlert(WITHLINKS)).length, 1);
   assert.deepEqual(splitAlert(null), []);
 });
+
+import { conflictAlert } from '../src/sheet.js';
+
+const CLASH = parseLinkSheet([
+  'Set,Product,SKU,Walmart Link,Affiliate Link',
+  'Chaos Rising,Mega Greninja ex Premium Collection,19994265476,x,',
+  'Miscellaneous,Lumiose City Mini Tin Display,19994265476,x,https://howl.link/bafn77d9yscwh',
+].join('\n'));
+
+const SAMENAME = parseLinkSheet([
+  'Set,Product,SKU,Walmart Link,Affiliate Link',
+  'Phantasmal Flames,3-Pack Booster,17818262325,x,https://mavely.app.link/e/abc',
+  'Phantasmal Flames,3-Pack Blister,17818262325,x,https://mavely.app.link/e/abc',
+].join('\n'));
+
+test('a SKU on two rows with different products and different links is reported', () => {
+  // The later row wins silently, so the earlier product inherits the later
+  // one's link: buyers sent to the wrong item, revenue misattributed. Worse
+  // than no link at all.
+  assert.equal(CLASH.conflicts.length, 1);
+  const body = conflictAlert(CLASH);
+  assert.match(body, /SKU 19994265476/);
+  assert.match(body, /Mega Greninja ex Premium Collection/);
+  assert.match(body, /Lumiose City Mini Tin Display/);
+  assert.match(body, /currently getting <https:\/\/howl\.link\/bafn77d9yscwh>/);
+});
+
+test('two names for one product sharing a link is not a conflict', () => {
+  // Reporting this would be noise that trains HK to ignore the alert.
+  assert.deepEqual(SAMENAME.conflicts, []);
+  assert.equal(conflictAlert(SAMENAME), null);
+});
+
+test('a plain duplicate row is not a conflict either', () => {
+  const dupe = parseLinkSheet([
+    'Set,Product,SKU,Walmart Link,Affiliate Link',
+    'X,Same Product,111,x,https://mavely.app.link/a',
+    'X,Same Product,111,x,https://mavely.app.link/a',
+  ].join('\n'));
+  assert.deepEqual(dupe.conflicts, []);
+});
+
+test('the conflict alert carries the sheet link and the mention', () => {
+  const body = conflictAlert(CLASH, { mention: '<@42>', sheetUrl: 'https://docs.google.com/x' });
+  assert.match(body, /^<@42> /);
+  assert.match(body, /Sheet: <https:\/\/docs\.google\.com\/x>/);
+});
+
+test('no conflicts sends nothing', () => {
+  const clean = parseLinkSheet('Set,Product,SKU,Link,Affiliate Link\nX,Y,1,z,https://mavely.app.link/a');
+  assert.equal(conflictAlert(clean), null);
+});

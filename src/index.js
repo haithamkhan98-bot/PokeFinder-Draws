@@ -1174,6 +1174,77 @@ async function redditCrosspost(message, args) {
   }
 }
 
+/**
+ * `!targetscan [n]` reads recent Target channel history and starts a run.
+ *
+ * Discord never replays messages a bot could not see at the time, so a
+ * permission problem or an outage during a raffle loses it permanently: the
+ * embeds sit in the channel and the bot will never hear about them. That is
+ * not hypothetical, it is how the first live Target raffle was missed.
+ *
+ * Feeds the same batcher the live handler uses, so a scan and a live embed
+ * land in one run rather than two. Items already held are reported as repeats
+ * rather than added twice.
+ */
+async function targetScan(message, raw) {
+  if (!TARGET_CHANNEL_ID) {
+    await message.reply('TARGET_CHANNEL_ID is not set, so there is no channel to scan.');
+    return;
+  }
+  if (!flag(TARGET_ENABLED)) {
+    await message.reply('TARGET_ENABLED is off, so a scan would collect items nothing would post.');
+    return;
+  }
+
+  const limit = Math.min(Math.max(parseInt(raw, 10) || 50, 1), 100);
+  try {
+    const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply(`Channel ${TARGET_CHANNEL_ID} is not a text channel the bot can read.`);
+      return;
+    }
+
+    const fetched = await channel.messages.fetch({ limit });
+    // Oldest first, so the batcher sees them in the order they were posted.
+    const ordered = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    const added = [];
+    const repeats = [];
+    const skipped = [];
+    let held = 0;
+
+    for (const m of ordered) {
+      for (const embed of m.embeds ?? []) {
+        if (!isRaffleEmbed(embed)) {
+          skipped.push(`"${embed?.author?.name ?? 'no author'}" [${(embed?.fields ?? []).map((f) => f.name).join(', ') || 'no fields'}]`);
+          continue;
+        }
+        const t = parseTargetRaffle(embed, { now: DateTime.now() });
+        if (!t) { skipped.push('a raffle embed with no usable tcin or title'); continue; }
+        const r = targetBatcher.add(t);
+        held = r.size;
+        (r.joined ? added : repeats).push(`${t.productName} (${t.tcin})`);
+      }
+    }
+
+    const uniqueSkips = [...new Set(skipped)];
+    await message.reply(
+      `Scanned the last ${ordered.length} message(s) in the Target channel.\n`
+      + `Added ${added.length}, already held ${repeats.length}, ${held} now in the run.\n`
+      + (added.length ? `\n**Added**\n${added.join('\n')}\n` : '')
+      + (uniqueSkips.length
+        ? `\n**Not raffles** (${skipped.length} embed(s), ${uniqueSkips.length} shape(s))\n`
+          + uniqueSkips.slice(0, 5).join('\n')
+        : '')
+      + (added.length
+        ? `\n\nThe run fires after ${Number(TARGET_QUIET_PERIOD_MS) / 60000} minutes of quiet.`
+        : ''),
+    );
+  } catch (err) {
+    await message.reply(`Could not scan the Target channel: ${err.message}`);
+  }
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1408,6 +1479,9 @@ client.on(Events.MessageCreate, async (message) => {
     if (/^!bbruns$/i.test(content)) { await bestbuyRuns(message); return; }
     if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
 
+    const tscan = content.match(/^!targetscan(?:\s+(\d+))?$/i);
+    if (tscan) { await targetScan(message, tscan[1]); return; }
+
     const tprobe = content.match(/^!targetprobe\b(.*)$/i);
     if (tprobe) { await targetProbe(message, tprobe[1]); return; }
     if (/^!bbresend$/i.test(content)) { await bestbuyResend(message); return; }
@@ -1483,10 +1557,23 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID && message.channelId === TARGET_CHANNEL_ID) {
-    for (const embed of message.embeds ?? []) {
+    if (!message.embeds?.length) {
+      console.log(`target channel: a message with no embeds from ${message.author?.username ?? 'unknown'}`);
+      return;
+    }
+    for (const embed of message.embeds) {
       // A Raffle Status field is the only thing separating a raffle from an
       // ordinary restock. The Type field reads "Restock" on both.
-      if (!isRaffleEmbed(embed)) continue;
+      //
+      // Logged when it does not match rather than skipped in silence. A wrong
+      // discriminator and a channel the bot cannot see look identical from
+      // outside otherwise, which is exactly what happened on the first live
+      // raffle.
+      if (!isRaffleEmbed(embed)) {
+        console.log(`target channel: skipped an embed, author "${embed?.author?.name ?? 'none'}", `
+          + `fields [${(embed?.fields ?? []).map((f) => f.name).join(', ') || 'none'}]`);
+        continue;
+      }
       const t = parseTargetRaffle(embed, { now: DateTime.now() });
       if (!t) {
         await alert(`A Target Raffles embed had a Raffle Status but no usable tcin or title, so it was ignored.\n${message.url}`);
@@ -1699,10 +1786,55 @@ function startRedditTicker() {
   pass();
 }
 
+/**
+ * Check the bot can actually see the channels it claims to be watching.
+ *
+ * Discord delivers MessageCreate only for channels the bot can view. Without
+ * the permission, or in a guild the bot is not in, no event ever arrives and
+ * the service looks exactly as it does when everything is fine: a startup line
+ * saying it is reading a channel, and then silence.
+ *
+ * That silence cost an afternoon on the first live Target raffle, so each
+ * configured channel is now fetched at boot and the result said out loud.
+ */
+async function checkChannels() {
+  const wanted = [
+    ['walmart', WALMART_CHANNEL_ID],
+    ['target', flag(TARGET_ENABLED) ? TARGET_CHANNEL_ID : null],
+    ['bestbuy', flag(BESTBUY_ENABLED) ? BESTBUY_CHANNEL_ID : null],
+    ['bestbuy checker', flag(BESTBUY_ENABLED) ? BESTBUY_CHECKER_CHANNEL_ID : null],
+    ['alert', ALERT_CHANNEL_ID],
+    ['member', DISCORD_MEMBER_CHANNEL_ID],
+  ].filter(([, id]) => id);
+
+  const bad = [];
+  for (const [label, id] of wanted) {
+    try {
+      const ch = await client.channels.fetch(id);
+      if (!ch) throw new Error('not found');
+      // Viewable is the one that matters: a channel can be fetched by id and
+      // still deliver no messages if the bot cannot view it.
+      const canView = ch.viewable ?? true;
+      console.log(`channel ${label}: #${ch.name ?? id} in ${ch.guild?.name ?? 'no guild'}`
+        + `${canView ? '' : '  NOT VIEWABLE'}`);
+      if (!canView) bad.push(`${label} (#${ch.name}) is not viewable by the bot`);
+    } catch (err) {
+      console.error(`channel ${label} (${id}) could not be fetched: ${err.message}`);
+      bad.push(`${label} (${id}) could not be fetched: ${err.message}`);
+    }
+  }
+
+  if (bad.length) {
+    await alert('**Some channels cannot be read, so nothing from them will ever arrive:**\n'
+      + bad.map((b) => `- ${b}`).join('\n'));
+  }
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
   if (DISCORD_MEMBER_CHANNEL_ID) {
     startDiscordScheduler(client, { onError: alert });
+    checkChannels().catch((err) => console.error(`channel check failed: ${err.message}`));
     console.log(`member draw posts will go to channel ${DISCORD_MEMBER_CHANNEL_ID}`
       + (DISCORD_MEMBER_ROLE_ID ? ` pinging role ${DISCORD_MEMBER_ROLE_ID}` : ' with NO role ping configured'));
   } else {

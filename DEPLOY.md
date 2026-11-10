@@ -1379,3 +1379,20 @@ plain style it does not need.
 Queued for the same slots the run is building, so a reminder pass does not
 re-queue the announcement, and queued last and caught, so a Reddit problem
 cannot cost the tweets or the Discord posts.
+
+### `!targetscan [n]`
+
+Reads the last n messages (default 50, max 100) of the Target channel, parses
+every raffle embed and feeds them to the same batcher the live handler uses.
+
+Discord never replays messages a bot could not see at the time, so a
+permission problem or an outage during a raffle loses it permanently: the
+embeds sit in the channel and the bot will never hear about them. That is how
+the first live Target raffle was missed.
+
+Oldest first, so the batcher sees them in posting order. Items already held
+are reported as repeats rather than added twice, so a scan and a live embed
+land in one run.
+
+It also prints the author and field names of anything it skipped, which is the
+fastest way to tell a wrong discriminator from an empty channel.

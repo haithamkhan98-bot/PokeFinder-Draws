@@ -118,10 +118,24 @@ test('the closing post is due an hour before close and goes to both subs', () =>
   assert.deepEqual(closing.subs, ['PokeCollectors', 'TCGHub']);
 });
 
-test('every item carries its own link, since Target has no catchall page', () => {
+test('every item is a markdown link, since Target has no catchall page', () => {
   const [live] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
-  assert.match(live.body, /\* Delta Reign Booster Display Box https:\/\/www\.target\.com\/p\/PokeFinder\/A-1013166576/);
+  // Reddit renders these, so the list reads as product names rather than a
+  // wall of target.com.
+  assert.match(live.body, /\* \[Delta Reign Booster Display Box\]\(https:\/\/www\.target\.com\/p\/PokeFinder\/A-1013166576\)/);
+  assert.match(live.body, /\* \[Delta Reign Elite Trainer Box\]\(https:\/\/www\.target\.com\/p\/PokeFinder\/A-1012793604\)/);
   assert.doesNotMatch(live.body, /Enter Here at/, 'there is no single draw page to point at');
+});
+
+test('the links survive the richtext conversion as link elements', () => {
+  const [live] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  const doc = toRichtext(live.body);
+  const list = doc.document.find((b) => b.e === 'list');
+  const first = list.c[0].c[0].c;
+  assert.deepEqual(first, [{
+    e: 'link', t: 'Delta Reign Booster Display Box',
+    u: 'https://www.target.com/p/PokeFinder/A-1013166576',
+  }]);
 });
 
 test('no Walmart tips block, since none of it applies to Target', () => {

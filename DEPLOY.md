@@ -1128,3 +1128,81 @@ a post written Monday still reads correctly on Wednesday.
 Member posts are queued only when `TARGET_LIVE` is set. Drafts are for reading
 in Buffer, and a Discord ping cannot be taken back. With no
 `DISCORD_MEMBER_CHANNEL_ID` they are skipped rather than queued to nowhere.
+
+## Reddit
+
+Native posts to both subs, as richtext so one post carries the grid image and
+the affiliate links together.
+
+### Why richtext and not markdown
+
+Reddit's submit endpoint takes either a markdown `text` field or a
+`richtext_json` document, never both, and only the richtext form can hold an
+image alongside formatted text. The web editor sends richtext, which is why a
+post made by hand has both. So the bot sends richtext too.
+
+`reddit-richtext.js` converts the small markdown subset `reddit-copy.js`
+produces: paragraphs, whole-line bold headings, `*` bullets and inline
+`[text](url)` links. It is pure and fully tested, which matters because it is
+the half that can be checked without credentials. Anything it does not
+recognise passes through as plain text, so a stray asterisk costs a character
+rather than a post.
+
+### Variables
+
+| Name | What it does |
+| --- | --- |
+| `REDDIT_CLIENT_ID` | From the app at reddit.com/prefs/apps. Must be a **web app**. |
+| `REDDIT_CLIENT_SECRET` | Same app. |
+| `REDDIT_ENABLED` | `true` to queue and send. Off by default, and independent of `BUFFER_LIVE`: the tweets going live does not mean the subs should start getting posts. |
+| `REDDIT_TICK_MS` | How often to send what is due. Default 60000. |
+| `REDDIT_DRAW_LINK` / `REDDIT_QUEUE_LINK` | Separate howl links for per-channel tracking. Unset, Reddit reuses the Discord links and the traffic cannot be told apart. |
+| `REDDIT_SUB_POKECOLLECTORS` / `REDDIT_SUB_TCGHUB` | Sub name overrides, for testing against a private sub. |
+| `REDDIT_USER_AGENT` | Reddit throttles or blocks generic agents, so this is not optional furniture. |
+
+### Setup
+
+1. Create the app at reddit.com/prefs/apps as a **web app**, redirect URI
+   `https://pokefinder-draws-production.up.railway.app/reddit/redirect`.
+2. Set `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`.
+3. Turn on **"Allow media in text posts"** in both subs' settings, or the image
+   is rejected and the post goes out without it.
+4. Open the connect URL printed at startup and authorize. The redirect page
+   names any scope that was not granted.
+5. Set `REDDIT_ENABLED=true`.
+
+`duration=permanent` is requested, or Reddit issues a one hour token and no
+refresh token and the bot stops posting an hour after setup. The refresh token
+is stored in the `secrets` table, not in an environment variable, because it is
+obtained at runtime.
+
+### Approval is part of posting, not a later step
+
+The `modposts` scope is the load bearing one. HK's own posts to his own subs are
+removed instantly by AutoModerator; approving straight after submitting keeps
+them up, and the gap between the two is exactly how long the post is invisible.
+So submit and approve happen inside one claimed row rather than in separate
+ticks.
+
+A failed approve does not fail the post. The submission is already up, and
+recording it is what lets a retry approve it rather than post it twice. That
+case alerts loudly, because it is the one failure that leaves a post HK cannot
+see.
+
+A failed image upload does not fail the post either: the links and the item
+list are the point, the grid is decoration.
+
+### Crossposting
+
+`!crosspost <sub> [title]` only, never from a run. Crossposting into subs HK
+does not moderate is what risks a domain ban on `howl.link`, and that would
+break the affiliate links in his own subs too, including in posts already up.
+Keeping it on a separate manual path means a problem there cannot take the
+owned-subs path down with it.
+
+No approve step: the bot does not moderate those subs.
+
+### Rate
+
+Two posts per tick and a two second gap between them. Consecutive submissions
+from one account inside a second is what Reddit's spam heuristics look for.

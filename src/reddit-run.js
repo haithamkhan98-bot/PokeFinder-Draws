@@ -1,0 +1,127 @@
+import {
+  scheduleRedditPost, claimDueRedditPosts, markRedditPosted, markRedditFailed,
+} from './db.js';
+import { uploadImage, submit, approve, isConnected } from './reddit.js';
+
+/**
+ * Queue a set of Reddit posts from reddit-copy.js.
+ *
+ * One row per sub, because each sub is a separate submission with its own id
+ * and its own approval. A post with `dueAt` null is due now, which is how the
+ * announcement goes out the moment a draw is detected.
+ */
+export async function queueRedditSet({ source, runId, posts }) {
+  const queued = [];
+  for (const post of posts) {
+    for (const sub of post.subs) {
+      await scheduleRedditPost({
+        source, runId, slot: post.slot, sub,
+        dueAt: post.dueAt ? post.dueAt.toJSDate() : new Date(),
+        title: post.title, body: post.body, imageUrl: post.imageUrl ?? null,
+      });
+      queued.push({ slot: post.slot, sub, dueAt: post.dueAt });
+    }
+  }
+  return queued;
+}
+
+/**
+ * Submit one claimed row: upload the grid, post, then approve at once.
+ *
+ * The approve is the reason this is one function rather than a post step and
+ * an approve step. HK's own posts to his own subs are removed by AutoModerator
+ * on submit, and the gap between posting and approving is exactly how long the
+ * post is invisible. Anything that could put those two in separate ticks would
+ * reintroduce the problem the modposts scope exists to solve.
+ *
+ * A failed approve does NOT fail the post. The submission is already up and
+ * recording it is what lets a retry approve it rather than post it twice.
+ */
+export async function postOne(row, { deps = {} } = {}) {
+  const { upload = uploadImage, send = submit, ok = approve } = deps;
+
+  let imageAssetId = null;
+  let imageError = null;
+  if (row.image_url) {
+    try {
+      imageAssetId = await upload(row.image_url);
+    } catch (err) {
+      // The links and the item list are the point; the grid is decoration.
+      // Losing the image is worth a post that still goes out on time.
+      imageError = err.message;
+    }
+  }
+
+  const posted = await send({
+    sub: row.sub, title: row.title, markdown: row.body, imageAssetId,
+  });
+
+  let approved = false;
+  let approveError = null;
+  try {
+    await ok(posted.fullname);
+    approved = true;
+  } catch (err) {
+    approveError = err.message;
+  }
+
+  return { ...posted, approved, imageError, approveError, imageAssetId };
+}
+
+/**
+ * One pass of the Reddit ticker.
+ *
+ * Returns what it did; the caller decides what is worth saying. A pass that
+ * finds nothing due is the normal case and is silent.
+ */
+export async function tickReddit({
+  claim = claimDueRedditPosts, post = postOne,
+  markPosted = markRedditPosted, markFailed = markRedditFailed,
+  connected = isConnected, alert = null, pauseMs = 2000,
+} = {}) {
+  const rows = await claim();
+  if (!rows.length) return [];
+  if (!await connected()) {
+    // Left queued rather than failed: once HK finishes the OAuth flow these
+    // are still waiting, and a reminder whose time has passed is dropped by
+    // the due check rather than posted late.
+    return [{ skipped: 'Reddit is not connected yet', due: rows.length }];
+  }
+
+  const done = [];
+  for (const [i, row] of rows.entries()) {
+    // Spaced out, because consecutive submissions from one account inside a
+    // second is what Reddit's spam heuristics look for.
+    if (i > 0 && pauseMs) await new Promise((r) => setTimeout(r, pauseMs));
+    try {
+      const r = await post(row);
+      await markPosted(row.id, { fullname: r.fullname, permalink: r.url, approved: r.approved });
+      done.push({ ...r, sub: row.sub, slot: row.slot, source: row.source });
+
+      if (alert && (r.imageError || r.approveError)) {
+        await alert(
+          `Reddit ${row.slot} to r/${row.sub} posted: ${r.url}\n`
+          + (r.imageError ? `The grid image did not upload: ${r.imageError}\n` : '')
+          + (r.approveError
+            ? `NOT APPROVED: ${r.approveError}\nAutoModerator may have removed it, so approve it by hand.`
+            : ''),
+        );
+      }
+    } catch (err) {
+      await markFailed(row.id, err.message);
+      done.push({ sub: row.sub, slot: row.slot, error: err.message });
+      if (alert) {
+        await alert(`Reddit ${row.slot} to r/${row.sub} failed `
+          + `(attempt ${row.attempts + 1} of 4): ${err.message}`);
+      }
+    }
+  }
+  return done;
+}
+
+/** A short block for the alert channel. */
+export function summariseReddit(queued) {
+  if (!queued.length) return 'no Reddit posts queued';
+  return queued.map((q) => `  r/${q.sub.padEnd(16)} ${q.slot.padEnd(13)} `
+    + `${q.dueAt ? q.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') : 'immediately'}`).join('\n');
+}

@@ -36,7 +36,11 @@ test('every response from /target/close allows cross origin reads', () => {
   const src = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
   const start = src.indexOf("if (path === '/target/close')");
   assert.ok(start > 0, 'route not found');
-  const route = src.slice(start, src.indexOf("if (path === '/canva/connect')", start));
+  // Ends at whatever route comes next, not at a named one. Pinning the end to
+  // /canva/connect meant inserting any route between the two swept it into
+  // this check, which is how the Reddit redirect first failed here.
+  const after = src.indexOf("if (path === '", start + 10);
+  const route = src.slice(start, after > 0 ? after : undefined);
   const writes = [...route.matchAll(/res\.writeHead\([^)]*\)/g)].map((m) => m[0]);
   assert.ok(writes.length >= 4, `expected several exits, saw ${writes.length}`);
   const missing = writes.filter((w) => !w.includes('CORS'));

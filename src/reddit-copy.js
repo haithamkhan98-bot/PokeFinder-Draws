@@ -140,7 +140,11 @@ export function queueRedditPosts({ items, dropAt, headline, now, imageUrl = null
     },
     {
       slot: 'going_live',
-      dueAt: et.minus({ minutes: 15 }),
+      // An hour out, not fifteen minutes. Queue drops are announced the night
+      // before and HK is not racing them the way he races a draw, so the
+      // reminder matches CollectFinder's hour-before post rather than the
+      // draw's tighter window.
+      dueAt: et.minus({ hours: 1 }),
       subs: QUEUE_SUBS,
       imageUrl,
       title: trimTitle(`Reminder: Walmart Queue Drops Today at ${etClock(dropAt)} EST | ${headline}`),

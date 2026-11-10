@@ -28,6 +28,9 @@ import { probeListing, formatProbe } from './target.js';
 import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-raffle.js';
 import { runTargetRaffle, summariseTarget } from './target-run.js';
 import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
+import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
+import { latestRedditPost } from './db.js';
+import { drawRedditPosts, queueRedditPosts, DRAW_SUBS, QUEUE_SUBS } from './reddit-copy.js';
 import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setTargetRunCloseTime } from './db.js';
 
 const {
@@ -51,6 +54,11 @@ const {
   // so waiting costs nothing and firing early splits one draw into two runs.
   TARGET_QUIET_PERIOD_MS = 600_000,
   TARGET_TICK_MS = 300_000,
+  REDDIT_ENABLED,
+  // Slower than the Discord poll on purpose. Reddit rates submissions per
+  // account and nothing here is to the minute: the announcement is queued due
+  // immediately and a minute's lateness on a reminder costs nothing.
+  REDDIT_TICK_MS = 60_000,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -247,6 +255,8 @@ const batcher = new Batcher({
       // in the set carries it and a post without it is not worth creating.
       let publish = null;
       let publishError = null;
+      let redditQueued = null;
+      let redditError = null;
 
       if (!drawImage) {
         publishError = 'skipped, because there is no draw image to attach';
@@ -287,6 +297,29 @@ const batcher = new Batcher({
         } catch (err) {
           publishError = err.message;
         }
+
+        // Reddit is queued separately from Buffer and after it, so a Reddit
+        // problem can never stop the tweets. It is also gated on its own flag:
+        // the X and Discord paths going live does not mean the subs should
+        // start getting posts.
+        if (flag(REDDIT_ENABLED)) {
+          try {
+            redditQueued = await queueRedditSet({
+              source: 'draw',
+              runId: res.runId,
+              posts: drawRedditPosts({
+                items: publish?.naming?.items ?? usable,
+                sets: publish?.sets ?? [],
+                startsAt: usable[0].startsAt,
+                endsAt: usable[0].endsAt,
+                now: DateTime.now(),
+                imageUrl: drawImage.url,
+              }),
+            });
+          } catch (err) {
+            redditError = err.message;
+          }
+        }
       }
 
       const lines = usable.map((i) => `  ${i.productName} (${i.pid}) ${i.priceDisplay}`).join('\n');
@@ -320,7 +353,10 @@ const batcher = new Batcher({
             ? `${publish.expected - publish.failed}/${publish.expected} created as `
               + `${flag(process.env.BUFFER_LIVE) ? 'scheduled posts' : 'drafts'}`
               + `${publish.naming.note ? ` (naming: ${publish.naming.note})` : ''}\n${summarise(publish)}`
-            : publishError}`,
+            : publishError}`
+        + (flag(REDDIT_ENABLED)
+            ? `\nReddit:\n${redditError ? `  not queued. ${redditError}` : summariseReddit(redditQueued ?? [])}`
+            : ''),
       );
       // The member facing Discord posts. The announcement is due immediately;
       // the rest are written with their due times and sent by the scheduler.
@@ -510,6 +546,28 @@ const queueBatcher = new Batcher({
         publishAnnouncement: flag(QUEUE_LIVE),
       });
 
+      // Same ordering as the draws: after Buffer, on its own flag, and a
+      // failure here is reported rather than thrown.
+      let queueReddit = null;
+      let queueRedditError = null;
+      if (flag(REDDIT_ENABLED)) {
+        try {
+          queueReddit = await queueRedditSet({
+            source: 'queue',
+            runId: res.runId,
+            posts: queueRedditPosts({
+              items: report.naming?.items ?? usable,
+              dropAt,
+              headline: report.headline.headline,
+              now: DateTime.now(),
+              imageUrl: report.image?.url ?? null,
+            }),
+          });
+        } catch (err) {
+          queueRedditError = err.message;
+        }
+      }
+
       await alert(
         `**Queue run ready** ${dropDate} (fired on ${reason}, run #${res.runId})\n`
         + (flag(QUEUE_LIVE) ? '' : 'DRAFTS ONLY. Nothing is scheduled or published and the '
@@ -521,6 +579,9 @@ const queueBatcher = new Batcher({
         + `\nGrid: ${report.image
             ? `${report.image.url} (${report.image.layout}, ${report.image.width}x${report.image.height})`
             : `not built. ${report.imageError}`}`
+        + (flag(REDDIT_ENABLED)
+            ? `\nReddit:\n${queueRedditError ? `  not queued. ${queueRedditError}` : summariseReddit(queueReddit ?? [])}`
+            : '')
         + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} came from the monitor`
         + (report.affiliate.covered < report.affiliate.total
           ? ', the rest fall back to plain PokeFinder links' : '')
@@ -1050,6 +1111,51 @@ async function targetProbe(message, rest) {
   if (chunk) await message.channel.send(`\`\`\`\n${chunk}\n\`\`\``);
 }
 
+/**
+ * `!crosspost <sub> [title]` sends the most recent Reddit post into another sub.
+ *
+ * Driven by hand and never by a run. Crossposting into subs HK does not
+ * moderate is what risks a domain ban on the affiliate links, and a domain ban
+ * would break those links in r/PokeCollectors and r/TCGHub too, including in
+ * posts already up. So this is a deliberate act with a named target, on a code
+ * path nothing automatic touches.
+ *
+ * The bot cannot approve in a sub it does not moderate, so there is no approve
+ * step here. If the sub's AutoModerator removes it, that is the sub's answer.
+ */
+async function redditCrosspost(message, args) {
+  const [, sub, title] = args.match(/^\s+(?:r\/)?([A-Za-z0-9_]{2,21})(?:\s+(.+))?$/) ?? [];
+  if (!sub) {
+    await message.reply('Usage: `!crosspost <subreddit> [title]`. Without a title the original post\'s title is reused.');
+    return;
+  }
+
+  const reddit = await import('./reddit.js');
+  if (!await reddit.isConnected()) {
+    await message.reply('Reddit is not connected yet. Open the connect URL from the startup logs first.');
+    return;
+  }
+
+  const latest = await latestRedditPost();
+  if (!latest) {
+    await message.reply('No Reddit post has gone out yet, so there is nothing to crosspost.');
+    return;
+  }
+
+  try {
+    const r = await reddit.crosspost({
+      sub, title: title?.trim() || latest.title, fullname: latest.fullname,
+    });
+    await message.reply(
+      `Crossposted to r/${sub}: ${r.url}\n`
+      + `Source: r/${latest.sub} "${latest.title}"\n`
+      + 'Not approved, since the bot does not moderate that sub. If their AutoModerator removes it, that is their call.',
+    );
+  } catch (err) {
+    await message.reply(`Crosspost to r/${sub} failed: ${err.message}`);
+  }
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1293,6 +1399,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!drawrefresh$/i.test(content)) { await drawRefresh(message); return; }
 
+    const xpost = content.match(/^!crosspost\b(.*)$/i);
+    if (xpost) { await redditCrosspost(message, xpost[1]); return; }
+
     return;
   }
 
@@ -1457,6 +1566,42 @@ function startTargetTicker() {
   pass();
 }
 
+/**
+ * The Reddit ticker.
+ *
+ * Separate from the Discord one because the failure modes are different: a
+ * Discord post either sends or does not, while a Reddit post can succeed and
+ * then be removed by AutoModerator, which is why posting and approving happen
+ * together inside one claim.
+ *
+ * Serial, like the others. Two overlapping passes could claim nothing twice
+ * thanks to SKIP LOCKED, but they would still both be submitting from one
+ * account at the same moment, which is what Reddit throttles.
+ */
+function startRedditTicker() {
+  let running = false;
+  const pass = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const did = await tickReddit({ alert });
+      for (const d of did) {
+        if (d.skipped) { console.log(`reddit: ${d.due} post(s) due but ${d.skipped}`); continue; }
+        if (d.error) { console.log(`reddit ${d.slot} to r/${d.sub} failed: ${d.error}`); continue; }
+        console.log(`reddit ${d.slot} to r/${d.sub}: ${d.url}${d.approved ? ' (approved)' : ' NOT APPROVED'}`);
+      }
+    } catch (err) {
+      // Logged, not alerted: a failing tick retries in a minute and a database
+      // hiccup every minute would bury the alert channel.
+      console.error(`reddit tick failed: ${err.message}`);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(pass, Number(REDDIT_TICK_MS)).unref?.();
+  pass();
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
   if (DISCORD_MEMBER_CHANNEL_ID) {
@@ -1504,8 +1649,16 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
   }
+  if (flag(REDDIT_ENABLED)) {
+    startRedditTicker();
+    console.log(`reddit posting is ON, checked every ${Number(REDDIT_TICK_MS) / 1000}s, `
+      + `draws to ${DRAW_SUBS.map((x) => `r/${x}`).join(' + ')}, queues to ${QUEUE_SUBS.map((x) => `r/${x}`).join(' + ')}`);
+  } else {
+    console.log('reddit posting is OFF, set REDDIT_ENABLED=true to turn it on');
+  }
   if (publicBaseUrl()) {
     console.log(`target close bookmarklet: ${publicBaseUrl()}/target/bookmarklet?key=${setupKey}`);
+    console.log(`reddit connect: ${publicBaseUrl()}/reddit/connect?key=${setupKey}`);
   }
   console.log(
     `quiet period ${Number(QUIET_PERIOD_MS) / 1000}s`

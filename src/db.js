@@ -703,3 +703,65 @@ export async function targetRunSlots(runId) {
   return new Set(rows.map((r) => r.slot));
 }
 
+/** Queue a Reddit post. One row per sub, since each is its own submission. */
+export async function scheduleRedditPost({
+  source, runId = null, slot, sub, dueAt, title, body, imageUrl = null,
+}) {
+  await pool.query(
+    `INSERT INTO reddit_posts (source, run_id, slot, sub, due_at, title, body, image_url)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (source, run_id, slot, sub) DO UPDATE
+       SET due_at = EXCLUDED.due_at, title = EXCLUDED.title,
+           body = EXCLUDED.body, image_url = EXCLUDED.image_url`,
+    [source, runId, slot, sub, dueAt, title, body, imageUrl],
+  );
+}
+
+/**
+ * Claim the Reddit posts that are due.
+ *
+ * A small limit on purpose: Reddit rates submissions per account, and a burst
+ * of posts from one tick is exactly what gets an account flagged as a bot.
+ */
+export async function claimDueRedditPosts({ limit = 2 } = {}) {
+  const { rows } = await pool.query(
+    `SELECT id, source, run_id, slot, sub, title, body, image_url, attempts
+       FROM reddit_posts
+      WHERE posted_at IS NULL AND due_at <= now() AND attempts < 4
+      ORDER BY due_at
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED`,
+    [limit],
+  );
+  return rows;
+}
+
+export async function markRedditPosted(id, { fullname, permalink, approved }) {
+  await pool.query(
+    `UPDATE reddit_posts
+        SET posted_at = now(), fullname = $2, permalink = $3, approved = $4, error = NULL
+      WHERE id = $1`,
+    [id, fullname, permalink, approved],
+  );
+}
+
+export async function markRedditFailed(id, message) {
+  await pool.query(
+    'UPDATE reddit_posts SET attempts = attempts + 1, error = $2 WHERE id = $1',
+    [id, String(message).slice(0, 500)],
+  );
+}
+
+/** The most recent posted submission for a run, for crossposting by hand. */
+export async function latestRedditPost(source = null) {
+  const { rows } = await pool.query(
+    `SELECT id, source, slot, sub, title, fullname, permalink, posted_at
+       FROM reddit_posts
+      WHERE posted_at IS NOT NULL AND fullname IS NOT NULL
+        AND ($1::text IS NULL OR source = $1)
+      ORDER BY posted_at DESC LIMIT 1`,
+    [source],
+  );
+  return rows[0] ?? null;
+}
+

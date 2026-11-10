@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Affiliate links from HK's Google Sheet.
  *
@@ -198,13 +199,27 @@ export function missingLinksAlert(map, { mention = null } = {}) {
 }
 
 /**
- * A stable fingerprint of the missing set, so the same list is not re-sent.
+ * A fingerprint of the alert, so the same one is not re-sent.
  *
- * Railway rolls containers over on every deploy, and several deploys can land
- * within a minute. Alerting on each boot would be three pings saying the same
- * thing. This changes only when the actual set of SKUs without links changes,
- * which is the moment worth hearing about.
+ * Railway rolls containers over on every deploy, and several can land within a
+ * minute. Alerting on each boot would be three pings saying the same thing.
+ *
+ * Covers the mention as well as the SKUs. The first version hashed only the
+ * SKUs, so when ALERT_USER_ID was added the list was unchanged and the send
+ * that would finally have carried the ping was suppressed: HK got the message
+ * with no ping and would never have got another.
+ *
+ * The SKUs are sorted so that resorting the sheet is not a change, and a
+ * renamed product is not one either. Neither is worth a second ping.
  */
-export function missingFingerprint(map) {
-  return missingLinks(map).map((r) => r.sku).sort().join(',');
+export function missingFingerprint(map, { mention = null } = {}) {
+  const skus = missingLinks(map).map((r) => r.sku).sort();
+  if (!skus.length) return '';
+  // Sorted, so resorting the sheet is not a change. The mention is part of it
+  // because gaining one IS a change to what HK would read, which the first
+  // version missed.
+  return createHash('sha256')
+    .update(`${mention ?? ''}|${skus.join(',')}`)
+    .digest('hex')
+    .slice(0, 32);
 }

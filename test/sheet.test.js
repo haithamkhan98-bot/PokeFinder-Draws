@@ -173,6 +173,23 @@ test('one missing SKU reads as singular', () => {
   assert.match(missingLinksAlert(one), /1 Walmart SKU still needs an affiliate link/);
 });
 
+test('gaining a mention changes the fingerprint, so the ping actually lands', () => {
+  // The first version hashed only the SKU list. Setting ALERT_USER_ID left the
+  // list identical, so the send that would finally have pinged was suppressed
+  // and the alert stayed silent forever.
+  assert.notEqual(
+    missingFingerprint(MISSING),
+    missingFingerprint(MISSING, { mention: '<@42>' }),
+  );
+});
+
+test('the same message twice fingerprints the same, so deploys stay quiet', () => {
+  assert.equal(
+    missingFingerprint(MISSING, { mention: '<@42>' }),
+    missingFingerprint(MISSING, { mention: '<@42>' }),
+  );
+});
+
 test('the fingerprint ignores row order, so a resort does not re-alert', () => {
   const reordered = parseLinkSheet([
     'Set,Product,SKU,Walmart Link,Affiliate Link',

@@ -1296,12 +1296,17 @@ alert channel, pinging `ALERT_USER_ID` when one is set. Grouped by set,
 because that is how the sheet is laid out and how the gaps get worked through;
 a flat list of eleven SKUs means hunting for each row.
 
-Sent only when the set of missing SKUs has CHANGED since the last time it was
-sent. Railway rolls containers over on every deploy and several can land
+Sent only when the alert has CHANGED since the last time it was sent, where
+"the alert" means the set of missing SKUs AND whether it carries a mention.
+Covering the mention matters: the first version hashed only the SKUs, so
+adding `ALERT_USER_ID` left the list identical and suppressed the very send
+that would have carried the ping. Railway rolls containers over on every deploy and several can land
 inside a minute, so alerting on each boot would be the same message three
-times. The fingerprint lives in the `secrets` table rather than in memory,
-precisely because the process restarts: an in-memory one would never suppress
-anything.
+times. The SKUs are sorted into the fingerprint, so resorting the sheet is not a
+change and neither is renaming a product. Neither is worth a second ping.
+
+The fingerprint lives in the `secrets` table rather than in memory, precisely
+because the process restarts: an in-memory one would never suppress anything.
 
 Nothing is sent when nothing is missing. An all clear on every boot is noise,
 and the absence of the message already says the sheet is complete.

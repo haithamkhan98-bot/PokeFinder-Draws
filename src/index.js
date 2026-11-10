@@ -1639,10 +1639,10 @@ function startTargetTicker() {
  */
 async function alertMissingLinks(map) {
   try {
-    const body = missingLinksAlert(map, {
-      mention: ALERT_USER_ID ? `<@${ALERT_USER_ID}>` : null,
-    });
-    const fingerprint = missingFingerprint(map);
+    const mention = ALERT_USER_ID ? `<@${ALERT_USER_ID}>` : null;
+    const body = missingLinksAlert(map, { mention });
+    // Fingerprinted on the message, so gaining a mention counts as a change.
+    const fingerprint = missingFingerprint(map, { mention });
     const previous = await getSecret('walmart_missing_links').catch(() => null);
     if (fingerprint === (previous ?? '')) return;
     await setSecret('walmart_missing_links', fingerprint);

@@ -275,3 +275,32 @@ CREATE TABLE IF NOT EXISTS target_discord_posts (
 
 CREATE INDEX IF NOT EXISTS target_discord_posts_due_idx
   ON target_discord_posts(due_at) WHERE posted_at IS NULL;
+
+-- Reddit posts, recorded and scheduled.
+--
+-- run_id is deliberately NOT a foreign key: draws, queue drops and Target
+-- raffles all post to Reddit and each keeps its runs in its own table, so one
+-- key could only ever point at one of them. `source` says which table the id
+-- belongs to.
+CREATE TABLE IF NOT EXISTS reddit_posts (
+  id         BIGSERIAL PRIMARY KEY,
+  source     TEXT        NOT NULL,
+  run_id     BIGINT,
+  slot       TEXT        NOT NULL,
+  sub        TEXT        NOT NULL,
+  due_at     TIMESTAMPTZ NOT NULL,
+  title      TEXT        NOT NULL,
+  body       TEXT        NOT NULL,
+  image_url  TEXT,
+  posted_at  TIMESTAMPTZ,
+  fullname   TEXT,
+  permalink  TEXT,
+  approved   BOOLEAN     NOT NULL DEFAULT false,
+  error      TEXT,
+  attempts   INTEGER     NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (source, run_id, slot, sub)
+);
+
+CREATE INDEX IF NOT EXISTS reddit_posts_due_idx
+  ON reddit_posts(due_at) WHERE posted_at IS NULL;

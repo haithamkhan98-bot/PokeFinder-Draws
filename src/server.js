@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { getImage } from './db.js';
 import { authorizeUrl, exchangeCode, savePending, takePending, isConnected } from './canva.js';
-import { setTargetCloseTime } from './db.js';
+import { setTargetCloseTime, getSecret, setSecret } from './db.js';
 import { closeKey, parseCloseInput, bookmarkletUrl } from './target-close.js';
 
 /**
@@ -62,6 +62,20 @@ const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;
  * `page`, so that the escaping one stays the default and nothing starts
  * emitting unescaped text by forgetting an argument.
  */
+/**
+ * The in flight OAuth state for Reddit, kept in the secrets table the way
+ * Canva's is. It only has to survive the round trip to Reddit and back, but a
+ * redeploy mid flow would lose an in memory one and the redirect would look
+ * forged.
+ */
+const redditPendingKey = (state) => `reddit_pending:${state}`;
+const savePendingReddit = (state) => setSecret(redditPendingKey(state), '1');
+const takePendingReddit = async (state) => {
+  const found = await getSecret(redditPendingKey(state));
+  if (found) await setSecret(redditPendingKey(state), '');
+  return Boolean(found);
+};
+
 function pageHtml(res, status, title, bodyHtml) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(
     `<!doctype html><meta charset="utf-8"><title>${esc(title)}</title>`
@@ -152,6 +166,73 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
         });
         res.writeHead(200, { ...CORS, 'content-type': 'text/plain' })
           .end(`Saved. TCIN ${tcin} closes ${parsed.closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET.`);
+        return;
+      }
+
+      if (path === '/reddit/connect') {
+        const url = new URL(req.url, 'http://localhost');
+        if (url.searchParams.get('key') !== setupKey) {
+          page(res, 403, 'Reddit', 'Wrong or missing key. The correct connect URL is printed in the Railway logs at startup.');
+          return;
+        }
+        if (!process.env.REDDIT_CLIENT_ID || !process.env.REDDIT_CLIENT_SECRET) {
+          page(res, 500, 'Reddit',
+            'REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET are not set on this service yet.');
+          return;
+        }
+        const reddit = await import('./reddit.js');
+        const state = randomBytes(16).toString('hex');
+        await savePendingReddit(state);
+        res.writeHead(302, {
+          location: reddit.authorizeUrl({
+            state, redirectUri: `${publicBaseUrl()}/reddit/redirect`,
+          }),
+        }).end();
+        return;
+      }
+
+      if (path === '/reddit/redirect') {
+        const url = new URL(req.url, 'http://localhost');
+        const code = url.searchParams.get('code');
+        const state = url.searchParams.get('state');
+        const denied = url.searchParams.get('error');
+
+        if (denied) { page(res, 400, 'Reddit declined', `Reddit returned: ${denied}`); return; }
+        if (!code || !state) { page(res, 400, 'Something is missing', 'No code or state came back from Reddit.'); return; }
+        // An unknown state means this redirect did not come from a flow this
+        // service started, so it is stale or forged. Either way, refuse it.
+        if (!await takePendingReddit(state)) {
+          page(res, 400, 'Expired or unrecognised', 'Start again from the connect URL in the Railway logs.');
+          return;
+        }
+
+        try {
+          const reddit = await import('./reddit.js');
+          const { scopes } = await reddit.exchangeCode({
+            code, redirectUri: `${publicBaseUrl()}/reddit/redirect`,
+          });
+          const who = await reddit.me().catch(() => null);
+          const missing = reddit.SCOPES.filter((sc) => !String(scopes ?? '').includes(sc));
+          page(res, 200, 'Reddit connected',
+            `Connected${who?.name ? ` as u/${who.name}` : ''}. The refresh token is stored.`
+            + (missing.length
+              ? ` WARNING: these scopes were not granted: ${missing.join(', ')}.`
+                + ' Without modposts the bot cannot approve its own posts, so AutoModerator removals will stick.'
+              : ' All scopes granted, including modposts for instant self approval.')
+            + ' You can close this tab.');
+        } catch (err) {
+          console.error('reddit token exchange failed:', err.message);
+          page(res, 500, 'Could not finish', err.message);
+        }
+        return;
+      }
+
+      if (path === '/reddit/status') {
+        const reddit = await import('./reddit.js');
+        const connected = await reddit.isConnected().catch(() => false);
+        if (!connected) { page(res, 200, 'Reddit', 'Not connected.'); return; }
+        const who = await reddit.me().catch((e) => ({ error: e.message }));
+        page(res, 200, 'Reddit', who?.name ? `Connected as u/${who.name}.` : `Connected, but: ${who?.error}`);
         return;
       }
 

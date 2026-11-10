@@ -88,6 +88,9 @@ export function parseLinkSheet(csv) {
   const iAff = columnIndex(header, 'affiliate');
   const iSet = columnIndex(header, 'set');
   const iName = columnIndex(header, 'product');
+  // The retailer's own link column, so the alert can show the real URL rather
+  // than one guessed from the SKU. "Walmart Link" and "Target Link" both match.
+  const iLink = columnIndex(header, 'walmart link', 'target link', 'product link', 'link');
   if (iSku === -1 || iAff === -1) {
     throw new Error(
       `the sheet has no ${iSku === -1 ? 'SKU' : 'Affiliate Link'} column. `
@@ -102,10 +105,14 @@ export function parseLinkSheet(csv) {
     const sku = skuKey(row[iSku]);
     if (!sku) continue;
     const affiliate = String(row[iAff] ?? '').trim();
+    const standard = iLink === -1 ? '' : String(row[iLink] ?? '').trim();
     bySku.set(sku, {
       sku,
       set,
       product: iName === -1 ? '' : String(row[iName] ?? '').trim(),
+      // The sheet's own link wins over a constructed one: it is what HK
+      // actually uses, and guessing the format is how a wrong slug creeps in.
+      link: /^https?:\/\//i.test(standard) ? standard : `https://www.walmart.com/ip/PokeFinder/${sku}`,
       // An empty cell and a placeholder both mean "no link yet". Treating the
       // placeholder as a link would post "[AFFILIATE LINK NEEDED]" as a URL.
       affiliate: /^\[.*\]$/.test(affiliate) || !/^https?:\/\//i.test(affiliate) ? null : affiliate,
@@ -175,10 +182,15 @@ export function missingLinks(map) {
  * Grouped by set, because that is how the sheet is laid out and how HK works
  * through it. A flat list of 11 SKUs means hunting for each row.
  *
+ * Each item carries its own link, taken from the sheet's own link column, so
+ * the message has everything needed to go and generate the affiliate link
+ * without opening anything else first. `sheetUrl` puts the sheet itself in
+ * the same message for the same reason.
+ *
  * Returns null when nothing is missing, so the caller sends nothing rather
  * than an all clear nobody asked for.
  */
-export function missingLinksAlert(map, { mention = null } = {}) {
+export function missingLinksAlert(map, { mention = null, sheetUrl = null } = {}) {
   const missing = missingLinks(map);
   if (!missing.length) return null;
 
@@ -189,13 +201,42 @@ export function missingLinksAlert(map, { mention = null } = {}) {
     bySet.get(key).push(r);
   }
 
+  // Angle brackets round each URL. Without them Discord renders a preview card
+  // per link, so eleven missing SKUs would bury the message under eleven
+  // embeds and the list would be unreadable.
   const blocks = [...bySet].map(([set, rows]) => `**${set}**\n`
-    + rows.map((r) => `${r.product || '(no product name)'} ${r.sku}`).join('\n'));
+    + rows.map((r) => `${r.product || '(no product name)'} ${r.sku} <${r.link}>`).join('\n'));
 
-  return `${mention ? `${mention} ` : ''}**${missing.length} Walmart SKU${missing.length === 1 ? '' : 's'} `
+  const head = `${mention ? `${mention} ` : ''}`
+    + `**${missing.length} Walmart SKU${missing.length === 1 ? '' : 's'} `
     + `still need${missing.length === 1 ? 's' : ''} an affiliate link.** `
-    + 'Until they have one they post as plain PokeFinder links and earn nothing.\n\n'
-    + `${blocks.join('\n\n')}`;
+    + 'Until they have one they post as plain PokeFinder links and earn nothing.'
+    + (sheetUrl ? `\n\nSheet: <${sheetUrl}>` : '');
+
+  return `${head}\n\n${blocks.join('\n\n')}`;
+}
+
+/**
+ * Split an alert across Discord messages.
+ *
+ * alert() truncates at 1900 characters, which on a long list would silently
+ * drop the SKUs at the bottom: the ones HK most needs to see, since they are
+ * the ones he has not got to yet. Split on blank lines so a set block stays
+ * whole, and keep the mention on the first part only so one ping covers the
+ * set rather than one per message.
+ */
+export function splitAlert(body, { limit = 1900 } = {}) {
+  if (!body) return [];
+  if (body.length <= limit) return [body];
+
+  const out = [];
+  let current = '';
+  for (const block of body.split('\n\n')) {
+    if (current && current.length + block.length + 2 > limit) { out.push(current); current = ''; }
+    current = current ? `${current}\n\n${block}` : block;
+  }
+  if (current) out.push(current);
+  return out;
 }
 
 /**

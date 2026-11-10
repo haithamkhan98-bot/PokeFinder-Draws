@@ -31,7 +31,7 @@ import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
 import { latestRedditPost, getSecret, setSecret } from './db.js';
 import {
-  loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint,
+  loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint, splitAlert,
 } from './sheet.js';
 
 // Alerted once per process, not once per drop. A broken sheet URL would
@@ -73,6 +73,9 @@ const {
   // Who to @ when SKUs are missing affiliate links. A Discord user ID; without
   // it the alert still goes out, just without the ping.
   ALERT_USER_ID,
+  // The sheet itself, linked in the missing links alert so everything needed
+  // is in one message.
+  WALMART_SHEET_URL,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -1417,8 +1420,9 @@ client.on(Events.MessageCreate, async (message) => {
       forgetSheet();
       try {
         const m = await loadAffiliateLinks();
-        const body = missingLinksAlert(m, { mention: null });
-        await message.reply(`${summariseSheet(m)}\n\n${body ?? 'Every SKU has an affiliate link.'}`);
+        const body = missingLinksAlert(m, { mention: null, sheetUrl: WALMART_SHEET_URL ?? null });
+        const parts = splitAlert(`${summariseSheet(m)}\n\n${body ?? 'Every SKU has an affiliate link.'}`);
+        for (const part of parts) await message.reply(part);
         // Asked for on purpose, so the dedup is reset: the next boot reports
         // again rather than staying silent because this reply already said it.
         await setSecret('walmart_missing_links', '').catch(() => {});
@@ -1640,13 +1644,15 @@ function startTargetTicker() {
 async function alertMissingLinks(map) {
   try {
     const mention = ALERT_USER_ID ? `<@${ALERT_USER_ID}>` : null;
-    const body = missingLinksAlert(map, { mention });
-    // Fingerprinted on the message, so gaining a mention counts as a change.
+    const body = missingLinksAlert(map, { mention, sheetUrl: WALMART_SHEET_URL ?? null });
+    // Fingerprinted with the mention, so gaining one counts as a change.
     const fingerprint = missingFingerprint(map, { mention });
     const previous = await getSecret('walmart_missing_links').catch(() => null);
     if (fingerprint === (previous ?? '')) return;
     await setSecret('walmart_missing_links', fingerprint);
-    if (body) await alert(body);
+    // Split rather than truncated: alert() cuts at 1900 characters, which on a
+    // long list would drop the SKUs at the bottom, the ones not got to yet.
+    for (const part of splitAlert(body)) await alert(part);
   } catch (err) {
     // Never load bearing. A failure here must not stop the bot booting.
     console.error(`could not report missing affiliate links: ${err.message}`);

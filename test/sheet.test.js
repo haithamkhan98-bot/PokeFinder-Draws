@@ -149,8 +149,8 @@ test('the alert names every SKU without a link, grouped by set', () => {
   assert.match(body, /^<@42> \*\*3 Walmart SKUs still need an affiliate link\.\*\*/);
   // Grouped because that is how the sheet is laid out and how HK works
   // through it; a flat list means hunting for each row.
-  assert.match(body, /\*\*Chaos Rising\*\*\nMega Greninja ex Premium Collection 222/);
-  assert.match(body, /\*\*Perfect Order\*\*\nBooster Bundle 333\n3-Pack Blisters 444/);
+  assert.match(body, /\*\*Chaos Rising\*\*\nMega Greninja ex Premium Collection 222 </);
+  assert.match(body, /\*\*Perfect Order\*\*\nBooster Bundle 333 <[^>]+>\n3-Pack Blisters 444 </);
   assert.doesNotMatch(body, /111/, 'SKUs that have a link are not listed');
 });
 
@@ -215,4 +215,57 @@ test('the fingerprint changes when a link is filled in', () => {
 test('a complete sheet fingerprints as empty, so it never alerts', () => {
   const complete = parseLinkSheet('Set,Product,SKU,Link,Affiliate Link\nX,Y,1,z,https://mavely.app.link/a');
   assert.equal(missingFingerprint(complete), '');
+});
+
+import { splitAlert } from '../src/sheet.js';
+
+const WITHLINKS = parseLinkSheet([
+  'Set,Product,SKU,Walmart Link,Affiliate Link',
+  'Chaos Rising,ETB,111,https://www.walmart.com/ip/PokeFinder/111,https://mavely.app.link/a',
+  ',Mega Greninja ex Premium Collection,222,https://www.walmart.com/ip/PokeFinder/222,',
+].join('\n'));
+
+test('each missing item carries its link, from the sheet own column', () => {
+  const body = missingLinksAlert(WITHLINKS);
+  assert.match(body, /Mega Greninja ex Premium Collection 222 <https:\/\/www\.walmart\.com\/ip\/PokeFinder\/222>/);
+});
+
+test('links are wrapped so Discord does not render a preview per item', () => {
+  // Eleven missing SKUs would otherwise bury the message under eleven embeds.
+  const body = missingLinksAlert(WITHLINKS);
+  for (const m of body.matchAll(/https?:\/\/\S+/g)) {
+    const at = body.indexOf(m[0]);
+    assert.equal(body[at - 1], '<', `unwrapped URL: ${m[0]}`);
+  }
+});
+
+test('a row with no link in the sheet falls back to the PokeFinder form', () => {
+  const noLink = parseLinkSheet('Set,Product,SKU,Walmart Link,Affiliate Link\nX,Y,999,,');
+  assert.equal(noLink.get('999').link, 'https://www.walmart.com/ip/PokeFinder/999');
+});
+
+test('the sheet link is included when configured, and omitted when not', () => {
+  assert.match(missingLinksAlert(WITHLINKS, { sheetUrl: 'https://docs.google.com/x' }), /Sheet: <https:\/\/docs\.google\.com\/x>/);
+  assert.doesNotMatch(missingLinksAlert(WITHLINKS), /Sheet:/);
+});
+
+test('a long alert is split rather than truncated', () => {
+  // alert() cuts at 1900 characters, which would drop the SKUs at the bottom,
+  // the ones HK has not got to yet.
+  const rows = ['Set,Product,SKU,Walmart Link,Affiliate Link'];
+  for (let i = 0; i < 120; i += 1) {
+    rows.push(`Set ${i},A Reasonably Long Product Name ${i},${1000000 + i},https://www.walmart.com/ip/PokeFinder/${1000000 + i},`);
+  }
+  const body = missingLinksAlert(parseLinkSheet(rows.join('\n')));
+  assert.ok(body.length > 1900);
+  const parts = splitAlert(body);
+  assert.ok(parts.length > 1);
+  for (const p of parts) assert.ok(p.length <= 1900, `part was ${p.length}`);
+  // Nothing is lost in the split.
+  assert.ok(parts.join('\n\n').includes('1000119'));
+});
+
+test('a short alert stays one message', () => {
+  assert.equal(splitAlert(missingLinksAlert(WITHLINKS)).length, 1);
+  assert.deepEqual(splitAlert(null), []);
 });

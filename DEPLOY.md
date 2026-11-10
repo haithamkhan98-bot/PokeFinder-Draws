@@ -1331,6 +1331,25 @@ bottom, which are the ones not got to yet.
 | `ALERT_USER_ID` | Discord user ID to @ in the missing links alert. Without it the alert still goes out, just unpinged. |
 | `WALMART_SHEET_URL` | The sheet's edit URL, linked in the alert so one message has everything. Optional. |
 
+### Duplicate SKUs
+
+A SKU on two rows under different products is reported too, separately from
+missing links, because the fix is different: a missing link needs generating,
+a conflict means one of the two rows has the wrong SKU typed in.
+
+It matters because the map keeps the last row silently, so the earlier product
+inherits the later one's affiliate link. Buyers go to the wrong item and the
+revenue is attributed to the wrong product, which is worse than having no link
+at all.
+
+Only reported when the two rows would actually send buyers somewhere
+different. The sheet has one Phantasmal Flames SKU under both "3-Pack Booster"
+and "3-Pack Blister" with a single link: two names for one product, harmless,
+and reporting it would be noise that trains the reader to ignore the alert.
+
+Deduplicated on its own fingerprint, so fixing a missing link does not silence
+an outstanding conflict or the other way round.
+
 ### `!sheet`
 
 Refetches immediately past the cache and reports the same list on demand. It

@@ -31,7 +31,7 @@ import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
 import { latestRedditPost, getSecret, setSecret } from './db.js';
 import {
-  loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint, splitAlert,
+  loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint, splitAlert, conflictAlert,
 } from './sheet.js';
 
 // Alerted once per process, not once per drop. A broken sheet URL would
@@ -1655,6 +1655,19 @@ async function alertMissingLinks(map) {
     // Split rather than truncated: alert() cuts at 1900 characters, which on a
     // long list would drop the SKUs at the bottom, the ones not got to yet.
     for (const part of splitAlert(body)) await alert(part);
+
+    // Reported alongside, but deduplicated separately: a conflict and a
+    // missing link are fixed differently, and one being resolved should not
+    // silence the other.
+    const clash = conflictAlert(map, {
+      mention: ALERT_USER_ID ? `<@${ALERT_USER_ID}>` : null,
+      sheetUrl: WALMART_SHEET_URL ?? null,
+    });
+    const clashPrint = (map.conflicts ?? []).map((c) => c.sku).sort().join(',');
+    if (clash && clashPrint !== (await getSecret('walmart_sku_conflicts').catch(() => null) ?? '')) {
+      await setSecret('walmart_sku_conflicts', clashPrint);
+      for (const part of splitAlert(clash)) await alert(part);
+    }
   } catch (err) {
     // Never load bearing. A failure here must not stop the bot booting.
     console.error(`could not report missing affiliate links: ${err.message}`);

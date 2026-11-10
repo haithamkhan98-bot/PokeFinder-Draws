@@ -99,17 +99,37 @@ export function parseLinkSheet(csv) {
   }
 
   const bySku = new Map();
+  // SKUs seen twice under different product names. The map keeps the last row
+  // silently, which means the earlier product inherits the later one's
+  // affiliate link: buyers sent to the wrong item and the revenue attributed
+  // to the wrong product. Worse than having no link, so it is reported.
+  const conflicts = [];
   let set = '';
   for (const row of rows.slice(1)) {
     if (iSet !== -1 && String(row[iSet] ?? '').trim()) set = row[iSet].trim();
     const sku = skuKey(row[iSku]);
     if (!sku) continue;
-    const affiliate = String(row[iAff] ?? '').trim();
     const standard = iLink === -1 ? '' : String(row[iLink] ?? '').trim();
+    const product = iName === -1 ? '' : String(row[iName] ?? '').trim();
+    const affiliate = String(row[iAff] ?? '').trim();
+    const already = bySku.get(sku);
+    // Only a conflict when the two rows would send buyers somewhere different.
+    // HK's sheet has the same Phantasmal Flames SKU under "3-Pack Booster" and
+    // "3-Pack Blister" with one link: two names for one product, harmless, and
+    // reporting it would be noise that trains him to ignore the alert.
+    const affNow = /^https?:\/\//i.test(affiliate) ? affiliate : null;
+    if (already && norm(already.product) !== norm(product) && already.affiliate !== affNow) {
+      conflicts.push({
+        sku,
+        products: [already.product, product],
+        sets: [already.set, set],
+        links: [already.affiliate, affNow],
+      });
+    }
     bySku.set(sku, {
       sku,
       set,
-      product: iName === -1 ? '' : String(row[iName] ?? '').trim(),
+      product,
       // The sheet's own link wins over a constructed one: it is what HK
       // actually uses, and guessing the format is how a wrong slug creeps in.
       link: /^https?:\/\//i.test(standard) ? standard : `https://www.walmart.com/ip/PokeFinder/${sku}`,
@@ -118,7 +138,31 @@ export function parseLinkSheet(csv) {
       affiliate: /^\[.*\]$/.test(affiliate) || !/^https?:\/\//i.test(affiliate) ? null : affiliate,
     });
   }
+  // Attached to the map rather than returned separately, so every existing
+  // caller keeps working and nothing has to thread a second value through.
+  bySku.conflicts = conflicts;
   return bySku;
+}
+
+/**
+ * The alert for SKUs that appear twice under different products.
+ *
+ * Separate from the missing links alert because the fix is different: a
+ * missing link needs generating, a conflict means one of the two rows has the
+ * wrong SKU typed in and no amount of link generation helps.
+ */
+export function conflictAlert(map, { mention = null, sheetUrl = null } = {}) {
+  const conflicts = map?.conflicts ?? [];
+  if (!conflicts.length) return null;
+  const lines = conflicts.map((c) => `SKU ${c.sku}: "${c.products[0]}" (${c.sets[0] || 'no set'}) `
+    + `and "${c.products[1]}" (${c.sets[1] || 'no set'}). `
+    + `"${c.products[0]}" is currently getting ${c.links[1] ? `<${c.links[1]}>` : 'no link'}`);
+  return `${mention ? `${mention} ` : ''}`
+    + `**${conflicts.length} SKU${conflicts.length === 1 ? ' is' : 's are'} on more than one row `
+    + 'under different products.** The later row wins, so the other product gets the wrong '
+    + 'affiliate link and its sales are attributed to the wrong item.'
+    + (sheetUrl ? `\n\nSheet: <${sheetUrl}>` : '')
+    + `\n\n${lines.join('\n')}`;
 }
 
 let cache = { at: 0, map: null, url: null };

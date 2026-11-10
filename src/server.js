@@ -85,12 +85,12 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
         const url = new URL(req.url, 'http://localhost');
         if (url.searchParams.get('key') !== setupKey) {
           page(res, 403, 'Target close time',
-            '<p>Wrong or missing key. The correct URL is printed in the Railway logs at startup.</p>');
+            'Wrong or missing key. The correct URL is printed in the Railway logs at startup.');
           return;
         }
         const base = publicBaseUrl();
         if (!base) {
-          page(res, 500, 'Target close time', '<p>No public URL for this service yet.</p>');
+          page(res, 500, 'Target close time', 'No public URL for this service yet.');
           return;
         }
         const href = bookmarkletUrl(base, closeKey);

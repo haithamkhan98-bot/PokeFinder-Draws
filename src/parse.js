@@ -191,12 +191,21 @@ export function isAffiliateLink(url) {
 /**
  * The link to publish for an item.
  *
- * An affiliate link from the embed wins. Anything else falls back to the
- * standard PokeFinder form built from the PID, which is what the link lists
- * have always used when no affiliate link is known.
+ * Three sources, in order of how much they are trusted:
+ *  1. An affiliate link on the embed. HK set that by hand for this drop, so
+ *     it is the most specific thing anyone knows about this item.
+ *  2. HK's sheet, keyed on SKU. Most items have a link here and no link on
+ *     the embed, which is the gap this closes: without it they post as plain
+ *     PokeFinder URLs and earn nothing.
+ *  3. The standard PokeFinder form built from the PID, as before.
+ *
+ * `sheet` is a Map from loadAffiliateLinks, or null when no sheet is
+ * configured, in which case this behaves exactly as it did before.
  */
-export function resolveLink({ sourceUrl, pid }) {
+export function resolveLink({ sourceUrl, pid, sheet = null }) {
   if (sourceUrl && isAffiliateLink(sourceUrl)) return { link: sourceUrl, affiliate: true };
+  const fromSheet = sheet?.get(String(pid).replace(/[^0-9]/g, ''))?.affiliate;
+  if (fromSheet) return { link: fromSheet, affiliate: true, fromSheet: true };
   return { link: `https://www.walmart.com/ip/PokeFinder/${pid}`, affiliate: false };
 }
 
@@ -218,7 +227,7 @@ function fieldMap(embed) {
  * `error` when it looks like a draw but could not be read, so the caller can
  * alert rather than drop it silently.
  */
-export function parseEmbed(embed, { now = DateTime.now() } = {}) {
+export function parseEmbed(embed, { now = DateTime.now(), sheet = null } = {}) {
   const author = embed?.author?.name?.trim();
   if (author !== DRAW_AUTHOR) return null;
 
@@ -251,7 +260,7 @@ export function parseEmbed(embed, { now = DateTime.now() } = {}) {
     priceCents: parsePrice(priceDisplay),
     imageUrl: embed?.thumbnail?.url ?? embed?.image?.url ?? null,
     sourceUrl: embed?.url ?? null,
-    ...resolveLink({ sourceUrl: embed?.url ?? null, pid: String(pid).replace(/[^0-9]/g, '') }),
+    ...resolveLink({ sourceUrl: embed?.url ?? null, pid: String(pid).replace(/[^0-9]/g, ''), sheet }),
     classification: classify(title),
     startsAt: win.start,
     endsAt: win.end,

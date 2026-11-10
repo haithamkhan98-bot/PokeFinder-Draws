@@ -23,3 +23,22 @@ test('no page() call passes markup, since page() escapes', () => {
   }
   assert.deepEqual(offenders, [], `page() called with markup:\n${offenders.join('\n')}`);
 });
+
+/**
+ * The bookmarklet runs on target.com and calls this service, which is cross
+ * origin. A plain GET is sent regardless, so a missing header does not stop
+ * the save, it only withholds the reply: the bookmarklet says "Failed to
+ * fetch" about a request that worked. Every exit from that route therefore
+ * needs the header, including the refusals, or a wrong key reports as a
+ * network failure and sends HK looking in the wrong place.
+ */
+test('every response from /target/close allows cross origin reads', () => {
+  const src = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
+  const start = src.indexOf("if (path === '/target/close')");
+  assert.ok(start > 0, 'route not found');
+  const route = src.slice(start, src.indexOf("if (path === '/canva/connect')", start));
+  const writes = [...route.matchAll(/res\.writeHead\([^)]*\)/g)].map((m) => m[0]);
+  assert.ok(writes.length >= 4, `expected several exits, saw ${writes.length}`);
+  const missing = writes.filter((w) => !w.includes('CORS'));
+  assert.deepEqual(missing, [], `exits without CORS:\n${missing.join('\n')}`);
+});

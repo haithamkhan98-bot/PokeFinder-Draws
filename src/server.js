@@ -2,6 +2,8 @@ import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { getImage } from './db.js';
 import { authorizeUrl, exchangeCode, savePending, takePending, isConnected } from './canva.js';
+import { setTargetCloseTime } from './db.js';
+import { closeKey, parseCloseInput, bookmarkletUrl } from './target-close.js';
 
 /**
  * A one time key guarding the Canva connect route.
@@ -56,6 +58,59 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
 
       if (path === '/health' || path === '/') {
         res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
+        return;
+      }
+
+      if (path === '/target/bookmarklet') {
+        // Guarded by the SETUP key, not the close key: this page hands out the
+        // close key, so guarding it with the thing it gives away would be no
+        // guard at all.
+        const url = new URL(req.url, 'http://localhost');
+        if (url.searchParams.get('key') !== setupKey) {
+          page(res, 403, 'Target close time',
+            '<p>Wrong or missing key. The correct URL is printed in the Railway logs at startup.</p>');
+          return;
+        }
+        const base = publicBaseUrl();
+        if (!base) {
+          page(res, 500, 'Target close time', '<p>No public URL for this service yet.</p>');
+          return;
+        }
+        page(res, 200, 'Target close time', [
+          '<p>Drag this to your bookmarks bar:</p>',
+          `<p><a href="${esc(bookmarkletUrl(base, closeKey))}">Target draw close</a></p>`,
+          '<p>Then, on a Target listing that is drawing, while signed in, click it.',
+          ' It reads the close time off the page, shows you what it found, and sends it here.</p>',
+          '<p>If it finds nothing, paste the time in yourself and it will still be saved.',
+          ' Either way it posts back what it saw, so the guessing can be replaced',
+          ' with something exact once a few have come through.</p>',
+        ].join(''));
+        return;
+      }
+
+      if (path === '/target/close') {
+        const url = new URL(req.url, 'http://localhost');
+        if (url.searchParams.get('key') !== closeKey) {
+          res.writeHead(403, { 'content-type': 'text/plain' }).end('Wrong or missing key.');
+          return;
+        }
+        const tcin = (url.searchParams.get('tcin') ?? '').trim();
+        if (!/^\d{6,}$/.test(tcin)) {
+          res.writeHead(400, { 'content-type': 'text/plain' }).end('Need a tcin.');
+          return;
+        }
+        const parsed = parseCloseInput(url.searchParams.get('closes'));
+        if (!parsed.ok) {
+          res.writeHead(400, { 'content-type': 'text/plain' }).end(`Not saved: ${parsed.reason}`);
+          return;
+        }
+        await setTargetCloseTime({
+          tcin,
+          closesAt: parsed.closesAt.toJSDate(),
+          raw: url.searchParams.get('raw') || null,
+        });
+        res.writeHead(200, { 'content-type': 'text/plain' })
+          .end(`Saved. TCIN ${tcin} closes ${parsed.closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET.`);
         return;
       }
 

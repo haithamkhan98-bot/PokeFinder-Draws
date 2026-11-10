@@ -473,3 +473,53 @@ export async function updatePendingDiscordPost({ runId, slot, body, imageUrl }) 
   );
   return rows[0] ?? null;
 }
+
+/**
+ * Record when a Target draw closes.
+ *
+ * Overwrites rather than erroring on a repeat: HK may click the bookmarklet
+ * twice, or Target may extend a window, and the newest reading is the one to
+ * trust.
+ */
+export async function setTargetCloseTime({ tcin, closesAt, raw = null, source = 'bookmarklet' }) {
+  const { rows } = await pool.query(
+    `INSERT INTO target_close_times (tcin, closes_at, source, raw, updated_at)
+          VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (tcin) DO UPDATE
+            SET closes_at = EXCLUDED.closes_at,
+                source    = EXCLUDED.source,
+                raw       = EXCLUDED.raw,
+                updated_at = now()
+       RETURNING tcin, closes_at, updated_at`,
+    [String(tcin), closesAt, source, raw],
+  );
+  return rows[0];
+}
+
+/** The close time for one listing, or null when nobody has sent it yet. */
+export async function targetCloseTime(tcin) {
+  const { rows } = await pool.query(
+    'SELECT tcin, closes_at, source, updated_at FROM target_close_times WHERE tcin = $1',
+    [String(tcin)],
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * The close time to use for a whole draw.
+ *
+ * A draw is several listings and HK will not click every one of them. Any
+ * listing's time stands for the draw, and the latest is taken so that a window
+ * Target extended on one item does not get undercut by a stale reading on
+ * another.
+ */
+export async function targetCloseTimeFor(tcins) {
+  if (!tcins?.length) return null;
+  const { rows } = await pool.query(
+    `SELECT tcin, closes_at FROM target_close_times
+       WHERE tcin = ANY($1) ORDER BY closes_at DESC LIMIT 1`,
+    [tcins.map(String)],
+  );
+  return rows[0] ?? null;
+}
+

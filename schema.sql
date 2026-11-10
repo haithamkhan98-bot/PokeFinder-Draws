@@ -181,3 +181,17 @@ CREATE TABLE IF NOT EXISTS bestbuy_items (
 CREATE INDEX IF NOT EXISTS bestbuy_items_run_idx ON bestbuy_items(run_id);
 CREATE INDEX IF NOT EXISTS bestbuy_runs_due_idx
   ON bestbuy_runs(post_at) WHERE posted_at IS NULL;
+
+-- Close times for Target draws.
+--
+-- Target only shows a draw's window to a signed in account, so the bot cannot
+-- read it. HK sends it from his own browser with a bookmarklet. Keyed on the
+-- TCIN because a draw is a set of individual listings, not one event, and the
+-- listings are what he has open when he clicks.
+CREATE TABLE IF NOT EXISTS target_close_times (
+  tcin        TEXT        PRIMARY KEY,
+  closes_at   TIMESTAMPTZ NOT NULL,
+  source      TEXT        NOT NULL DEFAULT 'bookmarklet',
+  raw         TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

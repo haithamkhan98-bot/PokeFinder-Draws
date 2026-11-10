@@ -89,3 +89,11 @@ test('flush on shutdown loses nothing in flight', async () => {
   assert.equal(fired.length, 1);
   assert.equal(fired[0].reason, 'flush');
 });
+
+test('a batcher with no onFire is refused rather than silently firing into nothing', () => {
+  // Shipped once as `onFlush`, which the class does not know. The quiet timer
+  // elapsed, the run was marked fired, and three live Target raffle listings
+  // produced no posts and no log line.
+  assert.throws(() => new Batcher({ quietMs: 10 }), /needs an onFire callback/);
+  assert.throws(() => new Batcher({ quietMs: 10, onFlush: () => {} }), /needs an onFire callback/);
+});

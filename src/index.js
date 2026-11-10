@@ -1483,10 +1483,23 @@ client.on(Events.MessageCreate, async (message) => {
   }
 
   if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID && message.channelId === TARGET_CHANNEL_ID) {
-    for (const embed of message.embeds ?? []) {
+    if (!message.embeds?.length) {
+      console.log(`target channel: a message with no embeds from ${message.author?.username ?? 'unknown'}`);
+      return;
+    }
+    for (const embed of message.embeds) {
       // A Raffle Status field is the only thing separating a raffle from an
       // ordinary restock. The Type field reads "Restock" on both.
-      if (!isRaffleEmbed(embed)) continue;
+      //
+      // Logged when it does not match rather than skipped in silence. A wrong
+      // discriminator and a channel the bot cannot see look identical from
+      // outside otherwise, which is exactly what happened on the first live
+      // raffle.
+      if (!isRaffleEmbed(embed)) {
+        console.log(`target channel: skipped an embed, author "${embed?.author?.name ?? 'none'}", `
+          + `fields [${(embed?.fields ?? []).map((f) => f.name).join(', ') || 'none'}]`);
+        continue;
+      }
       const t = parseTargetRaffle(embed, { now: DateTime.now() });
       if (!t) {
         await alert(`A Target Raffles embed had a Raffle Status but no usable tcin or title, so it was ignored.\n${message.url}`);
@@ -1699,10 +1712,55 @@ function startRedditTicker() {
   pass();
 }
 
+/**
+ * Check the bot can actually see the channels it claims to be watching.
+ *
+ * Discord delivers MessageCreate only for channels the bot can view. Without
+ * the permission, or in a guild the bot is not in, no event ever arrives and
+ * the service looks exactly as it does when everything is fine: a startup line
+ * saying it is reading a channel, and then silence.
+ *
+ * That silence cost an afternoon on the first live Target raffle, so each
+ * configured channel is now fetched at boot and the result said out loud.
+ */
+async function checkChannels() {
+  const wanted = [
+    ['walmart', WALMART_CHANNEL_ID],
+    ['target', flag(TARGET_ENABLED) ? TARGET_CHANNEL_ID : null],
+    ['bestbuy', flag(BESTBUY_ENABLED) ? BESTBUY_CHANNEL_ID : null],
+    ['bestbuy checker', flag(BESTBUY_ENABLED) ? BESTBUY_CHECKER_CHANNEL_ID : null],
+    ['alert', ALERT_CHANNEL_ID],
+    ['member', DISCORD_MEMBER_CHANNEL_ID],
+  ].filter(([, id]) => id);
+
+  const bad = [];
+  for (const [label, id] of wanted) {
+    try {
+      const ch = await client.channels.fetch(id);
+      if (!ch) throw new Error('not found');
+      // Viewable is the one that matters: a channel can be fetched by id and
+      // still deliver no messages if the bot cannot view it.
+      const canView = ch.viewable ?? true;
+      console.log(`channel ${label}: #${ch.name ?? id} in ${ch.guild?.name ?? 'no guild'}`
+        + `${canView ? '' : '  NOT VIEWABLE'}`);
+      if (!canView) bad.push(`${label} (#${ch.name}) is not viewable by the bot`);
+    } catch (err) {
+      console.error(`channel ${label} (${id}) could not be fetched: ${err.message}`);
+      bad.push(`${label} (${id}) could not be fetched: ${err.message}`);
+    }
+  }
+
+  if (bad.length) {
+    await alert('**Some channels cannot be read, so nothing from them will ever arrive:**\n'
+      + bad.map((b) => `- ${b}`).join('\n'));
+  }
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
   if (DISCORD_MEMBER_CHANNEL_ID) {
     startDiscordScheduler(client, { onError: alert });
+    checkChannels().catch((err) => console.error(`channel check failed: ${err.message}`));
     console.log(`member draw posts will go to channel ${DISCORD_MEMBER_CHANNEL_ID}`
       + (DISCORD_MEMBER_ROLE_ID ? ` pinging role ${DISCORD_MEMBER_ROLE_ID}` : ' with NO role ping configured'));
   } else {

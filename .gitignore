@@ -3,3 +3,8 @@ npm-debug.log*
 .env
 .env.*
 .DS_Store
+
+# Build artifacts and archives. node_modules was committed for the first few
+# months of this repo; Railway runs npm install from package-lock.json, so it
+# was never needed and only made every diff unreadable.
+*.zip

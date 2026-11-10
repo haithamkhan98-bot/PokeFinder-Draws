@@ -1314,9 +1314,22 @@ and the absence of the message already says the sheet is complete.
 `[AFFILIATE LINK NEEDED]` counts as missing, so a placeholder gets chased
 rather than quietly passing for a filled cell.
 
+Each item carries its own link, taken from the sheet's own link column rather
+than built from the SKU, so a wrong slug cannot creep in. Rows with no link in
+that column fall back to the PokeFinder form.
+
+Every URL is wrapped in angle brackets. Without that Discord renders a preview
+card per link, and eleven missing SKUs would bury the message under eleven
+embeds.
+
+The alert is split across messages rather than truncated. `alert()` cuts at
+1900 characters, which on a long list would silently drop the SKUs at the
+bottom, which are the ones not got to yet.
+
 | Name | What it does |
 | --- | --- |
 | `ALERT_USER_ID` | Discord user ID to @ in the missing links alert. Without it the alert still goes out, just unpinged. |
+| `WALMART_SHEET_URL` | The sheet's edit URL, linked in the alert so one message has everything. Optional. |
 
 ### `!sheet`
 

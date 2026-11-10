@@ -45,7 +45,11 @@ test('the bookmarklet url survives being put in an href attribute', () => {
   // attribute. A broken attribute here produces a bookmark that looks fine
   // and silently does nothing.
   const href = bookmarkletUrl('https://example.up.railway.app', 'k3y');
+  // A double quote would end the attribute early; a space would end it too.
   assert.equal(href.includes('"'), false);
-  assert.equal(href.includes("'"), false);
   assert.equal(href.includes(' '), false);
+  // Apostrophes DO survive encodeURIComponent and are expected here, since the
+  // script is full of string literals. They are harmless inside a double
+  // quoted attribute, which is what the page uses.
+  assert.ok(href.includes("'"));
 });

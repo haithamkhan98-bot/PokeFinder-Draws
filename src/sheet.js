@@ -162,3 +162,49 @@ export function summariseSheet(map) {
   const withLink = [...map.values()].filter((r) => r.affiliate).length;
   return `sheet: ${map.size} SKUs, ${withLink} with affiliate links`;
 }
+
+/** The SKUs with no affiliate link, in sheet order. */
+export function missingLinks(map) {
+  return map ? [...map.values()].filter((r) => !r.affiliate) : [];
+}
+
+/**
+ * The alert naming every SKU that still needs an affiliate link.
+ *
+ * Grouped by set, because that is how the sheet is laid out and how HK works
+ * through it. A flat list of 11 SKUs means hunting for each row.
+ *
+ * Returns null when nothing is missing, so the caller sends nothing rather
+ * than an all clear nobody asked for.
+ */
+export function missingLinksAlert(map, { mention = null } = {}) {
+  const missing = missingLinks(map);
+  if (!missing.length) return null;
+
+  const bySet = new Map();
+  for (const r of missing) {
+    const key = r.set || 'No set';
+    if (!bySet.has(key)) bySet.set(key, []);
+    bySet.get(key).push(r);
+  }
+
+  const blocks = [...bySet].map(([set, rows]) => `**${set}**\n`
+    + rows.map((r) => `${r.product || '(no product name)'} ${r.sku}`).join('\n'));
+
+  return `${mention ? `${mention} ` : ''}**${missing.length} Walmart SKU${missing.length === 1 ? '' : 's'} `
+    + `still need${missing.length === 1 ? 's' : ''} an affiliate link.** `
+    + 'Until they have one they post as plain PokeFinder links and earn nothing.\n\n'
+    + `${blocks.join('\n\n')}`;
+}
+
+/**
+ * A stable fingerprint of the missing set, so the same list is not re-sent.
+ *
+ * Railway rolls containers over on every deploy, and several deploys can land
+ * within a minute. Alerting on each boot would be three pings saying the same
+ * thing. This changes only when the actual set of SKUs without links changes,
+ * which is the moment worth hearing about.
+ */
+export function missingFingerprint(map) {
+  return missingLinks(map).map((r) => r.sku).sort().join(',');
+}

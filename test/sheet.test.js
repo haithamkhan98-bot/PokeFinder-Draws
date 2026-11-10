@@ -133,3 +133,69 @@ test('no URL configured returns null rather than throwing', async () => {
 test('the summary counts how many SKUs still need a link', () => {
   assert.equal(summariseSheet(parseLinkSheet(CSV)), 'sheet: 4 SKUs, 3 with affiliate links');
 });
+
+import { missingLinks, missingLinksAlert, missingFingerprint } from '../src/sheet.js';
+
+const MISSING = parseLinkSheet([
+  'Set,Product,SKU,Walmart Link,Affiliate Link',
+  'Chaos Rising,ETB,111,x,https://mavely.app.link/a',
+  ',Mega Greninja ex Premium Collection,222,x,',
+  'Perfect Order,Booster Bundle,333,x,[AFFILIATE LINK NEEDED]',
+  ',3-Pack Blisters,444,x,',
+].join('\n'));
+
+test('the alert names every SKU without a link, grouped by set', () => {
+  const body = missingLinksAlert(MISSING, { mention: '<@42>' });
+  assert.match(body, /^<@42> \*\*3 Walmart SKUs still need an affiliate link\.\*\*/);
+  // Grouped because that is how the sheet is laid out and how HK works
+  // through it; a flat list means hunting for each row.
+  assert.match(body, /\*\*Chaos Rising\*\*\nMega Greninja ex Premium Collection 222/);
+  assert.match(body, /\*\*Perfect Order\*\*\nBooster Bundle 333\n3-Pack Blisters 444/);
+  assert.doesNotMatch(body, /111/, 'SKUs that have a link are not listed');
+});
+
+test('the placeholder counts as missing, so it gets chased', () => {
+  assert.ok(missingLinks(MISSING).some((r) => r.sku === '333'));
+});
+
+test('nothing missing sends nothing, rather than an all clear', () => {
+  const complete = parseLinkSheet('Set,Product,SKU,Link,Affiliate Link\nX,Y,1,z,https://mavely.app.link/a');
+  assert.equal(missingLinksAlert(complete), null);
+});
+
+test('without a user ID the alert still goes out, just unpinged', () => {
+  assert.doesNotMatch(missingLinksAlert(MISSING, {}), /<@/);
+  assert.match(missingLinksAlert(MISSING, {}), /^\*\*3 Walmart SKUs/);
+});
+
+test('one missing SKU reads as singular', () => {
+  const one = parseLinkSheet('Set,Product,SKU,Link,Affiliate Link\nX,Y,1,z,');
+  assert.match(missingLinksAlert(one), /1 Walmart SKU still needs an affiliate link/);
+});
+
+test('the fingerprint ignores row order, so a resort does not re-alert', () => {
+  const reordered = parseLinkSheet([
+    'Set,Product,SKU,Walmart Link,Affiliate Link',
+    'Perfect Order,3-Pack Blisters,444,x,',
+    ',Booster Bundle,333,x,[AFFILIATE LINK NEEDED]',
+    'Chaos Rising,ETB,111,x,https://mavely.app.link/a',
+    ',Mega Greninja ex Premium Collection,222,x,',
+  ].join('\n'));
+  assert.equal(missingFingerprint(MISSING), missingFingerprint(reordered));
+});
+
+test('the fingerprint changes when a link is filled in', () => {
+  const fixed = parseLinkSheet([
+    'Set,Product,SKU,Walmart Link,Affiliate Link',
+    'Chaos Rising,ETB,111,x,https://mavely.app.link/a',
+    ',Mega Greninja ex Premium Collection,222,x,https://mavely.app.link/b',
+    'Perfect Order,Booster Bundle,333,x,[AFFILIATE LINK NEEDED]',
+    ',3-Pack Blisters,444,x,',
+  ].join('\n'));
+  assert.notEqual(missingFingerprint(MISSING), missingFingerprint(fixed));
+});
+
+test('a complete sheet fingerprints as empty, so it never alerts', () => {
+  const complete = parseLinkSheet('Set,Product,SKU,Link,Affiliate Link\nX,Y,1,z,https://mavely.app.link/a');
+  assert.equal(missingFingerprint(complete), '');
+});

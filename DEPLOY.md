@@ -1289,8 +1289,32 @@ beats a drop with none. A sheet that cannot be read at all never stops a drop
 posting: items fall back to plain links and the alert channel says so once per
 process rather than once per embed.
 
+### Missing links are reported, not asked for
+
+At startup the bot posts the SKUs that still have no affiliate link to the
+alert channel, pinging `ALERT_USER_ID` when one is set. Grouped by set,
+because that is how the sheet is laid out and how the gaps get worked through;
+a flat list of eleven SKUs means hunting for each row.
+
+Sent only when the set of missing SKUs has CHANGED since the last time it was
+sent. Railway rolls containers over on every deploy and several can land
+inside a minute, so alerting on each boot would be the same message three
+times. The fingerprint lives in the `secrets` table rather than in memory,
+precisely because the process restarts: an in-memory one would never suppress
+anything.
+
+Nothing is sent when nothing is missing. An all clear on every boot is noise,
+and the absence of the message already says the sheet is complete.
+
+`[AFFILIATE LINK NEEDED]` counts as missing, so a placeholder gets chased
+rather than quietly passing for a filled cell.
+
+| Name | What it does |
+| --- | --- |
+| `ALERT_USER_ID` | Discord user ID to @ in the missing links alert. Without it the alert still goes out, just unpinged. |
+
 ### `!sheet`
 
-Refetches immediately, bypassing the cache, and reports how many SKUs are
-loaded and which ones still have no affiliate link. Use it after filling links
-in rather than waiting out the five minutes.
+Refetches immediately past the cache and reports the same list on demand. It
+also resets the dedup, so the next startup reports again rather than staying
+silent because this reply already said it.

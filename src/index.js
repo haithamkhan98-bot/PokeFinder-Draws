@@ -29,8 +29,10 @@ import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-ra
 import { runTargetRaffle, summariseTarget } from './target-run.js';
 import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
-import { latestRedditPost } from './db.js';
-import { loadAffiliateLinks, summariseSheet, forgetSheet } from './sheet.js';
+import { latestRedditPost, getSecret, setSecret } from './db.js';
+import {
+  loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint,
+} from './sheet.js';
 
 // Alerted once per process, not once per drop. A broken sheet URL would
 // otherwise fire on every embed of every run.
@@ -68,6 +70,9 @@ const {
   // account and nothing here is to the minute: the announcement is queued due
   // immediately and a minute's lateness on a reminder costs nothing.
   REDDIT_TICK_MS = 60_000,
+  // Who to @ when SKUs are missing affiliate links. A Discord user ID; without
+  // it the alert still goes out, just without the ping.
+  ALERT_USER_ID,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -1412,14 +1417,11 @@ client.on(Events.MessageCreate, async (message) => {
       forgetSheet();
       try {
         const m = await loadAffiliateLinks();
-        const missing = m ? [...m.values()].filter((r) => !r.affiliate) : [];
-        await message.reply(
-          `${summariseSheet(m)}\n`
-          + (missing.length
-            ? `Without a link (${missing.length}): ${missing.slice(0, 15).map((r) => `${r.product || r.sku} ${r.sku}`).join(', ')}`
-              + (missing.length > 15 ? `, and ${missing.length - 15} more` : '')
-            : 'Every SKU has an affiliate link.'),
-        );
+        const body = missingLinksAlert(m, { mention: null });
+        await message.reply(`${summariseSheet(m)}\n\n${body ?? 'Every SKU has an affiliate link.'}`);
+        // Asked for on purpose, so the dedup is reset: the next boot reports
+        // again rather than staying silent because this reply already said it.
+        await setSecret('walmart_missing_links', '').catch(() => {});
       } catch (err) {
         await message.reply(`Could not read the sheet: ${err.message}`);
       }
@@ -1622,6 +1624,35 @@ function startTargetTicker() {
  * thanks to SKIP LOCKED, but they would still both be submitting from one
  * account at the same moment, which is what Reddit throttles.
  */
+/**
+ * Tell HK which SKUs still need an affiliate link.
+ *
+ * Sent only when the set of missing SKUs differs from the last time it was
+ * sent. Railway rolls containers over on every deploy and several can land
+ * within a minute, so alerting on each boot would be the same message three
+ * times. The fingerprint is kept in the secrets table rather than in memory
+ * precisely because the process restarts; an in-memory one would never
+ * suppress anything.
+ *
+ * Nothing is sent when nothing is missing. An all clear on every boot is
+ * noise, and the absence of this message already means the sheet is complete.
+ */
+async function alertMissingLinks(map) {
+  try {
+    const body = missingLinksAlert(map, {
+      mention: ALERT_USER_ID ? `<@${ALERT_USER_ID}>` : null,
+    });
+    const fingerprint = missingFingerprint(map);
+    const previous = await getSecret('walmart_missing_links').catch(() => null);
+    if (fingerprint === (previous ?? '')) return;
+    await setSecret('walmart_missing_links', fingerprint);
+    if (body) await alert(body);
+  } catch (err) {
+    // Never load bearing. A failure here must not stop the bot booting.
+    console.error(`could not report missing affiliate links: ${err.message}`);
+  }
+}
+
 function startRedditTicker() {
   let running = false;
   const pass = async () => {
@@ -1704,7 +1735,10 @@ client.once(Events.ClientReady, (c) => {
   }
   if (process.env.WALMART_SHEET_CSV) {
     loadAffiliateLinks()
-      .then((m) => console.log(`walmart affiliate ${summariseSheet(m)}`))
+      .then(async (m) => {
+        console.log(`walmart affiliate ${summariseSheet(m)}`);
+        await alertMissingLinks(m);
+      })
       .catch((err) => console.error(`walmart affiliate sheet unreadable at boot: ${err.message}`));
   } else {
     console.log('no WALMART_SHEET_CSV set, so items post with plain PokeFinder links');

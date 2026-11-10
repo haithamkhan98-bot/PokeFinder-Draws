@@ -154,30 +154,73 @@ export async function scheduleDiscordPost({ runId, slot, channelId, dueAt, body,
  * SKIP LOCKED means two instances of the bot, which Railway can briefly run
  * during a deploy, cannot both grab the same row and post it twice.
  */
-export async function claimDueDiscordPosts({ limit = 5 } = {}) {
-  const { rows } = await pool.query(
-    `SELECT id, run_id, slot, channel_id, body, image_url, attempts
-       FROM discord_posts
-      WHERE posted_at IS NULL AND due_at <= now() AND attempts < 5
-      ORDER BY due_at
-      LIMIT $1
-      FOR UPDATE SKIP LOCKED`,
-    [limit],
-  );
-  return rows;
+/**
+ * The two Discord queues, by the `source` every claimed row carries.
+ *
+ * Walmart draws and Target raffles keep separate tables because each one's
+ * run_id is a foreign key into its own runs table. The source travels with the
+ * row so the scheduler marks the right one posted, and a wrong source can only
+ * come from code in this file rather than from a caller.
+ */
+const DISCORD_TABLES = {
+  walmart: 'discord_posts',
+  target: 'target_discord_posts',
+};
+
+function discordTable(source) {
+  const table = DISCORD_TABLES[source];
+  if (!table) throw new Error(`unknown discord post source: ${source}`);
+  return table;
 }
 
-export async function markDiscordPosted(id, messageId) {
+/**
+ * Claim the Discord posts that are due, across both queues.
+ *
+ * SKIP LOCKED means two instances of the bot, which Railway can briefly run
+ * during a deploy, cannot both grab the same row and post it twice. Each queue
+ * is claimed in its own statement: Postgres will not take FOR UPDATE on a
+ * UNION, and two small indexed queries are cheaper than being clever.
+ */
+export async function claimDueDiscordPosts({ limit = 5 } = {}) {
+  const out = [];
+  for (const source of Object.keys(DISCORD_TABLES)) {
+    const { rows } = await pool.query(
+      `SELECT id, run_id, slot, channel_id, body, image_url, attempts
+         FROM ${discordTable(source)}
+        WHERE posted_at IS NULL AND due_at <= now() AND attempts < 5
+        ORDER BY due_at
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED`,
+      [limit],
+    );
+    out.push(...rows.map((r) => ({ ...r, source })));
+  }
+  return out;
+}
+
+export async function markDiscordPosted(id, messageId, source = 'walmart') {
   await pool.query(
-    'UPDATE discord_posts SET posted_at = now(), message_id = $2, error = NULL WHERE id = $1',
+    `UPDATE ${discordTable(source)} SET posted_at = now(), message_id = $2, error = NULL WHERE id = $1`,
     [id, messageId],
   );
 }
 
-export async function markDiscordFailed(id, message) {
+export async function markDiscordFailed(id, message, source = 'walmart') {
   await pool.query(
-    'UPDATE discord_posts SET attempts = attempts + 1, error = $2 WHERE id = $1',
+    `UPDATE ${discordTable(source)} SET attempts = attempts + 1, error = $2 WHERE id = $1`,
     [id, String(message).slice(0, 500)],
+  );
+}
+
+/** Queue a member facing Discord post for a Target raffle run. */
+export async function scheduleTargetDiscordPost({ runId, slot, channelId, dueAt, body, imageUrl = null }) {
+  await pool.query(
+    `INSERT INTO target_discord_posts (run_id, slot, channel_id, due_at, body, image_url)
+     VALUES ($1,$2,$3,$4,$5,$6)
+     ON CONFLICT (run_id, slot) DO UPDATE
+       SET due_at = EXCLUDED.due_at, body = EXCLUDED.body,
+           channel_id = EXCLUDED.channel_id, image_url = EXCLUDED.image_url`,
+    [runId, slot, channelId, dueAt, body, imageUrl],
   );
 }
 

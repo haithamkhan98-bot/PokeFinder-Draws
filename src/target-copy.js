@@ -125,3 +125,61 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
 
   return posts;
 }
+
+/**
+ * The two member facing Discord posts for a Target raffle.
+ *
+ * Live and closing only, matching the `discord` flags on the beats above. The
+ * morning reminder is deliberately not one: members already got the
+ * announcement and will get the hour warning, and a third ping on a draw they
+ * have had a day to enter is what makes people mute a role.
+ *
+ * Close times are Discord timestamps rather than written-out clock times.
+ * They render in each member's own timezone and count themselves down, so a
+ * post written on Monday still reads correctly on Wednesday. Walmart's member
+ * posts work the same way.
+ *
+ * Every item carries its own markdown link, because Target has no catchall
+ * draw page: there is no single "Draw Link" footer to put at the bottom the
+ * way the Walmart posts have.
+ *
+ * `role` must be the mention string `<@&id>`. Discord renders the literal text
+ * "@PokeFinder+" without pinging anyone.
+ */
+export function targetDiscordPosts({ items, now, closesAt, role = '@PokeFinder+' }) {
+  if (!closesAt) return [];
+  const headline = raffleHeadline(items);
+  const ordered = orderedItems(items);
+  const noun = ordered.length > 1 ? 'Draws' : 'Draw';
+  const lines = ordered
+    .map((i) => `- [${i.postName ?? i.productName ?? i.rawTitle}](${i.link})`)
+    .join('\n');
+  const close = Math.floor(closesAt.toSeconds());
+
+  return [
+    {
+      slot: 'live',
+      dueAt: now,
+      text: [
+        `# Target ${headline} ${noun} Are Live Now`,
+        '',
+        `**Entries accepted until <t:${close}:F> (<t:${close}:R>)** ${role}`,
+        '',
+        `**Items in These ${noun}:**`,
+        lines,
+      ].join('\n'),
+    },
+    {
+      slot: 'closing',
+      dueAt: closesAt.minus({ hours: 1 }),
+      text: [
+        `# 1 Hour Left to Enter the Target ${headline} ${noun}`,
+        '',
+        `**Entries close <t:${close}:R>** ${role}`,
+        '',
+        `**Items in These ${noun}:**`,
+        lines,
+      ].join('\n'),
+    },
+  ];
+}

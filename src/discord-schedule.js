@@ -3,6 +3,10 @@ import { claimDueDiscordPosts, markDiscordPosted, markDiscordFailed } from './db
 /**
  * Sends the member facing Discord posts when they fall due.
  *
+ * Serves both queues, Walmart draws and Target raffles. Each claimed row says
+ * which one it came from, so one scheduler and one retry policy cover both
+ * rather than a second poll loop drifting out of step with this one.
+ *
  * The schedule lives in Postgres rather than in timers, so a redeploy or a
  * crash cannot lose a post. This only has to notice that something is due,
  * which a short poll does perfectly well and far more simply than anything
@@ -34,13 +38,13 @@ export function startDiscordScheduler(client, { intervalMs = 10_000, onError } =
             // Without this the role mention renders but does not ping.
             allowedMentions: { parse: ['roles'] },
           });
-          await markDiscordPosted(post.id, sent.id);
-          console.log(`posted discord ${post.slot} for run ${post.run_id}`);
+          await markDiscordPosted(post.id, sent.id, post.source);
+          console.log(`posted discord ${post.source} ${post.slot} for run ${post.run_id}`);
         } catch (err) {
-          await markDiscordFailed(post.id, err.message);
+          await markDiscordFailed(post.id, err.message, post.source);
           // Five attempts, then it stops retrying and stays visible in the table.
           onError?.(
-            `Discord post "${post.slot}" for run ${post.run_id} failed `
+            `Discord post "${post.slot}" for ${post.source} run ${post.run_id} failed `
             + `(attempt ${post.attempts + 1} of 5): ${err.message}`,
           );
         }

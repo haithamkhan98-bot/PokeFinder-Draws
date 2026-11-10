@@ -1,9 +1,12 @@
 import { DateTime } from 'luxon';
 import { nameItems } from './naming.js';
 import { orderedItems } from './copy.js';
-import { buildRafflePosts, raffleHeadline, raffleItemLines } from './target-copy.js';
+import { buildRafflePosts, raffleHeadline, raffleItemLines, targetDiscordPosts } from './target-copy.js';
 import { createPost, DRAW_CHANNELS } from './buffer.js';
-import { recordTargetPost, markTargetRunAnnounced, targetRunItems, storeImage } from './db.js';
+import {
+  recordTargetPost, markTargetRunAnnounced, targetRunItems, storeImage,
+  scheduleTargetDiscordPost,
+} from './db.js';
 import { buildGrid } from './grid.js';
 import { fetchAndTrim } from './image.js';
 import { imageUrl as storedImageUrl } from './server.js';
@@ -49,6 +52,10 @@ export async function runTargetRaffle({
   runId, now = DateTime.now(), closesAt = null,
   imageUrl = null, asDraft = true, publishLive = false,
   slots = null, prenamed = null,
+  // The member Discord channel and role ping. Left unset the Discord posts
+  // are skipped rather than queued to nowhere, which is what happens on a
+  // deploy with no DISCORD_MEMBER_CHANNEL_ID.
+  discordChannelId = null, discordRole = '@PokeFinder+',
 }) {
   const rows = await targetRunItems(runId);
   const items = rows.map((r) => ({
@@ -59,7 +66,7 @@ export async function runTargetRaffle({
   }));
 
   const report = {
-    runId, items: items.length, headline: null, posts: [], errors: [],
+    runId, items: items.length, headline: null, posts: [], discord: [], errors: [],
     affiliate: { total: items.length, covered: items.filter((i) => i.affiliate).length },
   };
   if (!items.length) {
@@ -119,6 +126,26 @@ export async function runTargetRaffle({
     }
   }
 
+  // The member Discord posts go through the durable queue in Postgres rather
+  // than a timer, so a redeploy cannot lose one. Queued only for the slots
+  // this call is building, so a reminder pass does not re-queue the
+  // announcement.
+  if (discordChannelId) {
+    const wantedSlots = new Set(wanted.map((p) => p.slot));
+    for (const dp of targetDiscordPosts({ items: named, now, closesAt, role: discordRole })) {
+      if (!wantedSlots.has(dp.slot)) continue;
+      try {
+        await scheduleTargetDiscordPost({
+          runId, slot: dp.slot, channelId: discordChannelId,
+          dueAt: dp.dueAt.toJSDate(), body: dp.text, imageUrl: picture,
+        });
+        report.discord.push({ slot: dp.slot, when: dp.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') });
+      } catch (err) {
+        report.errors.push(`discord ${dp.slot}: ${err.message}`);
+      }
+    }
+  }
+
   if (wanted.some((p) => p.slot === 'live')) {
     await markTargetRunAnnounced(runId, { headline: report.headline, imageUrl: picture });
   }
@@ -136,6 +163,7 @@ export function summariseTarget(report) {
   const lines = [...bySlot.entries()].map(
     ([slot, v]) => `  ${slot.padEnd(10)} ${v.when.padEnd(22)} ${v.n} channel(s)${v.discord ? ' + Discord' : ''}`,
   );
+  for (const d of report.discord) lines.push(`  discord    ${d.slot.padEnd(10)} ${d.when}`);
   if (report.image) lines.push(`  grid       ${report.image.layout}, ${report.image.width}x${report.image.height}`);
   if (report.imageError) lines.push(`  grid       not built. ${report.imageError}`);
   if (report.errors.length) lines.push(`  errors: ${report.errors.join('; ')}`);

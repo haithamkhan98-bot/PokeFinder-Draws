@@ -28,6 +28,7 @@ export const LEAD_MS = 15 * 60_000;
  */
 export async function tickTargetReminders({
   now = DateTime.now(), asDraft = true, alert = null,
+  discordChannelId = null, discordRole = '@PokeFinder+',
   // Injected so the ticker can be tested without a database or a Buffer
   // account. Every one of these either reads the run store or posts, and both
   // are things a test needs to stand in for.
@@ -74,6 +75,7 @@ export async function tickTargetReminders({
     const report = await runRaffle({
       runId: run.id, now, closesAt, imageUrl: picture,
       asDraft, publishLive: false, slots: new Set(due),
+      discordChannelId, discordRole,
     });
     done.push({ runId: run.id, action: 'reminded', slots: due, checked, report });
 

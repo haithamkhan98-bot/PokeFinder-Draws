@@ -25,6 +25,9 @@ import { bestbuyDigest } from './bestbuy-copy.js';
 import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun, recentBestbuyRuns } from './db.js';
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 import { probeListing, formatProbe } from './target.js';
+import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-raffle.js';
+import { runTargetRaffle, summariseTarget } from './target-run.js';
+import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setTargetRunCloseTime } from './db.js';
 
 const {
   DISCORD_TOKEN,
@@ -38,6 +41,14 @@ const {
   // Droplist embed has landed costs nothing, and firing early now means a
   // PUBLISHED post missing items, with the stragglers hitting the amend path.
   QUEUE_QUIET_PERIOD_MS = 300_000,
+  TARGET_CHANNEL_ID,
+  TARGET_ENABLED,
+  TARGET_LIVE,
+  // Longer again than the queue's. Target raffle listings appear one at a
+  // time over several minutes rather than in a burst, and unlike a queue drop
+  // there is no deadline to race: the draw is already open and runs for days,
+  // so waiting costs nothing and firing early splits one draw into two runs.
+  TARGET_QUIET_PERIOD_MS = 600_000,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -366,6 +377,88 @@ const batcher = new Batcher({
  * embeds are less consistent than draw embeds and can trickle in rather than
  * arrive in one burst, so this one waits QUEUE_QUIET_PERIOD_MS.
  */
+/**
+ * Target raffle listings into one run.
+ *
+ * Keyed on a constant rather than a date. A Walmart draw belongs to the day it
+ * opens; a Target draw is a window with no such key, and every raffle listing
+ * seen while one is open belongs to it.
+ */
+const targetBatcher = new Batcher({
+  quietMs: Number(TARGET_QUIET_PERIOD_MS),
+  ceilingMs: Number(CEILING_MS),
+  keyOf: () => 'target',
+  onLate: async ({ item }) => {
+    // Not a problem here, unlike the queue. A Target draw stays open, so a
+    // late listing joins the run and shows up in the next reminder.
+    await alert(`Target raffle listing arrived after the run fired: ${item.productName} (${item.tcin}). `
+      + 'It has joined the open run and will appear in the next reminder.');
+  },
+  onFlush: async ({ items, reason }) => {
+    try {
+      const usable = usableRaffleItems(items);
+      const dropped = items.filter((i) => i.classification === 'excluded');
+      if (!usable.length) {
+        await alert(`Target raffle fired on ${reason} with nothing postable.`
+          + (dropped.length ? ` ${dropped.length} excluded: ${dropped.map((i) => i.rawTitle).join('; ')}` : ''));
+        return;
+      }
+
+      let run = await openTargetRun();
+      const joining = Boolean(run);
+      if (!run) run = await startTargetRun({});
+      const added = await addTargetItems(run.id, usable);
+
+      // The close time may already be known from an earlier bookmarklet click
+      // on any listing in this draw.
+      if (!run.closes_at) {
+        const found = await targetCloseTimeFor(usable.map((i) => i.tcin));
+        if (found) {
+          await setTargetRunCloseTime(run.id, found.closes_at);
+          run.closes_at = found.closes_at;
+        }
+      }
+      const closesAt = run.closes_at ? DateTime.fromJSDate(new Date(run.closes_at)) : null;
+
+      if (joining) {
+        // The announcement already went out. Do not post again; the next
+        // reminder rebuilds from the run and will carry these.
+        await alert(`**Target draw updated** (run #${run.id}, fired on ${reason})\n`
+          + `${added.length} new listing(s) joined: ${added.join(', ') || 'none'}\n`
+          + 'The announcement already went out, so nothing was posted. The next reminder will carry them.');
+        return;
+      }
+
+      if (!process.env.BUFFER_TOKEN) {
+        await alert(`Target draw #${run.id}: ${usable.length} listing(s) saved, but BUFFER_TOKEN is not set so nothing was posted.`);
+        return;
+      }
+
+      const report = await runTargetRaffle({
+        runId: run.id,
+        now: DateTime.now(),
+        closesAt,
+        asDraft: !flag(TARGET_LIVE),
+        publishLive: flag(TARGET_LIVE),
+      });
+
+      await alert(
+        `**Target draw ready** (run #${run.id}, fired on ${reason})\n`
+        + (flag(TARGET_LIVE) ? '' : 'DRAFTS ONLY. Nothing is published or scheduled. Set TARGET_LIVE=true to go live.\n')
+        + `Headline: ${report.headline}\n`
+        + `Listings: ${report.items}`
+        + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')
+        + `\nCloses: ${closesAt ? closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') + ' ET' : 'UNKNOWN. Click the bookmarklet on any listing to set it, or the two reminders cannot be scheduled.'}`
+        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} from the monitor`
+        + (report.affiliate.covered < report.affiliate.total ? ', the rest fall back to plain PokeFinder links' : '')
+        + `\nPosts:\n${summariseTarget(report)}`,
+      );
+    } catch (err) {
+      await alert(`Target raffle run failed: ${err.message}`);
+    }
+  },
+});
+
 const queueBatcher = new Batcher({
   quietMs: Number(QUEUE_QUIET_PERIOD_MS),
   ceilingMs: Number(CEILING_MS),
@@ -1240,6 +1333,22 @@ client.on(Events.MessageCreate, async (message) => {
     return;
   }
 
+  if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID && message.channelId === TARGET_CHANNEL_ID) {
+    for (const embed of message.embeds ?? []) {
+      // A Raffle Status field is the only thing separating a raffle from an
+      // ordinary restock. The Type field reads "Restock" on both.
+      if (!isRaffleEmbed(embed)) continue;
+      const t = parseTargetRaffle(embed, { now: DateTime.now() });
+      if (!t) {
+        await alert(`A Target Raffles embed had a Raffle Status but no usable tcin or title, so it was ignored.\n${message.url}`);
+        continue;
+      }
+      const r = targetBatcher.add(t);
+      console.log(`${r.joined ? 'added' : 'repeat'} target ${t.tcin} ${t.productName} (${r.size} held)`);
+    }
+    return;
+  }
+
   if (message.channelId !== WALMART_CHANNEL_ID) return;
   if (!message.embeds?.length) return;
 
@@ -1339,12 +1448,17 @@ client.once(Events.ClientReady, (c) => {
   } else {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }
+  if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID) {
+    console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}`);
+  } else {
+    console.log('target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
+  }
   if (publicBaseUrl()) {
     console.log(`target close bookmarklet: ${publicBaseUrl()}/target/bookmarklet?key=${setupKey}`);
   }
   console.log(
     `quiet period ${Number(QUIET_PERIOD_MS) / 1000}s`
-    + ` (queue ${Number(QUEUE_QUIET_PERIOD_MS) / 1000}s)`
+    + ` (queue ${Number(QUEUE_QUIET_PERIOD_MS) / 1000}s, target ${Number(TARGET_QUIET_PERIOD_MS) / 1000}s)`
     + `, ceiling ${Number(CEILING_MS) / 1000}s`,
   );
 });

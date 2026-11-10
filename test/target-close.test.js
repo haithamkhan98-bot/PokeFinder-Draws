@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
-import { parseCloseInput, tcinFromUrl, bookmarkletUrl, bookmarkletSource } from '../src/target-close.js';
+import { parseCloseInput, parseCloseText, tcinFromUrl, bookmarkletUrl, bookmarkletSource } from '../src/target-close.js';
 
 const now = DateTime.fromISO('2026-11-09T14:00', { zone: 'America/New_York' });
 
@@ -52,4 +52,55 @@ test('the bookmarklet url survives being put in an href attribute', () => {
   // script is full of string literals. They are harmless inside a double
   // quoted attribute, which is what the page uses.
   assert.ok(href.includes("'"));
+});
+
+test("Target's own wording parses, in Target's timezone", () => {
+  const et = (s) => {
+    const d = parseCloseText(s, { now });
+    return d ? `${d.setZone('America/New_York').toFormat('ccc LLL d yyyy, h:mma')} ET` : null;
+  };
+  // The real line, read off a live draw page. CT, not the reader's zone:
+  // Target is a Minneapolis company. Reading it as Eastern would fire the
+  // closing reminder an hour late, every single time.
+  assert.equal(et('Enter by 10am CT on Nov 11'), 'Wed Nov 11 2026, 11:00AM ET');
+  assert.equal(et('Nov 11 at 10am CT'), 'Wed Nov 11 2026, 11:00AM ET');
+  assert.equal(et('Enter by 10:30am CT on Nov 11'), 'Wed Nov 11 2026, 11:30AM ET');
+  assert.equal(et('Ends 11:59pm ET on Dec 1'), 'Tue Dec 1 2026, 11:59PM ET');
+  assert.equal(et('Enter by 10am PT on Nov 11'), 'Wed Nov 11 2026, 1:00PM ET');
+});
+
+test('the year is inferred forwards, since Target omits it', () => {
+  // January, read in November, means next year.
+  assert.equal(parseCloseText('Ends 9pm CT on Jan 3', { now }).year, 2027);
+  assert.equal(parseCloseText('Enter by 10am CT on Nov 11', { now }).year, 2026);
+});
+
+test('zone abbreviations resolve through IANA names, so DST is right', () => {
+  // CT is UTC-5 in October and UTC-6 in November. A fixed offset would be
+  // wrong for half the year, and these draws straddle the changeover.
+  const oct = parseCloseText('Enter by 10am CT on Oct 20', {
+    now: DateTime.fromISO('2026-10-01T12:00', { zone: 'America/New_York' }),
+  });
+  assert.equal(oct.toUTC().hour, 15);
+  assert.equal(parseCloseText('Enter by 10am CT on Nov 11', { now }).toUTC().hour, 16);
+});
+
+test('unparseable wording is null, not a wrong guess', () => {
+  assert.equal(parseCloseText('gibberish', { now }), null);
+  assert.equal(parseCloseText('Enter by soon', { now }), null);
+  assert.equal(parseCloseText('', { now }), null);
+});
+
+test("parseCloseInput accepts Target's wording as well as ISO and epoch", () => {
+  const r = parseCloseInput('Enter by 10am CT on Nov 11', { now });
+  assert.ok(r.ok);
+  assert.equal(r.closesAt.toISO(), '2026-11-11T16:00:00.000Z');
+});
+
+test('the bookmarklet sends the found line without asking first', () => {
+  const src = bookmarkletSource('https://example.app', 'k3y');
+  // One click in the happy path. The prompt is only the fallback for when
+  // the server says it could not read what the page offered.
+  assert.match(src, /if \(found\) \{ send\(found, false\); return; \}/);
+  assert.match(src, /indexOf\('Saved'\) === 0/);
 });

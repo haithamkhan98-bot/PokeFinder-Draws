@@ -2,6 +2,8 @@ import { DateTime } from 'luxon';
 import { nameItems } from './naming.js';
 import { orderedItems } from './copy.js';
 import { buildRafflePosts, raffleHeadline, raffleItemLines, targetDiscordPosts } from './target-copy.js';
+import { targetRedditPosts } from './reddit-copy.js';
+import { queueRedditSet } from './reddit-run.js';
 import { createPost, DRAW_CHANNELS } from './buffer.js';
 import {
   recordTargetPost, markTargetRunAnnounced, targetRunItems, storeImage,
@@ -56,6 +58,10 @@ export async function runTargetRaffle({
   // are skipped rather than queued to nowhere, which is what happens on a
   // deploy with no DISCORD_MEMBER_CHANNEL_ID.
   discordChannelId = null, discordRole = '@PokeFinder+',
+  // Off unless the caller says otherwise, matching every other posting path
+  // here: a run should not start producing Reddit posts because the code
+  // shipped, only because the flag is on.
+  reddit = false,
 }) {
   const rows = await targetRunItems(runId);
   const items = rows.map((r) => ({
@@ -66,7 +72,7 @@ export async function runTargetRaffle({
   }));
 
   const report = {
-    runId, items: items.length, headline: null, posts: [], discord: [], errors: [],
+    runId, items: items.length, headline: null, posts: [], discord: [], reddit: [], errors: [],
     affiliate: { total: items.length, covered: items.filter((i) => i.affiliate).length },
   };
   if (!items.length) {
@@ -146,6 +152,23 @@ export async function runTargetRaffle({
     }
   }
 
+  // Reddit, queued for the same slots this call is building so a reminder
+  // pass does not re-queue the announcement. Last, and caught, so a Reddit
+  // problem can never cost the tweets or the Discord posts.
+  if (reddit) {
+    try {
+      const wantedSlots = new Set(wanted.map((p) => p.slot));
+      report.reddit = await queueRedditSet({
+        source: 'target',
+        runId,
+        posts: targetRedditPosts({ items: named, now, closesAt, imageUrl: picture })
+          .filter((p) => wantedSlots.has(p.slot)),
+      });
+    } catch (err) {
+      report.errors.push(`reddit: ${err.message}`);
+    }
+  }
+
   if (wanted.some((p) => p.slot === 'live')) {
     await markTargetRunAnnounced(runId, { headline: report.headline, imageUrl: picture });
   }
@@ -164,6 +187,9 @@ export function summariseTarget(report) {
     ([slot, v]) => `  ${slot.padEnd(10)} ${v.when.padEnd(22)} ${v.n} channel(s)${v.discord ? ' + Discord' : ''}`,
   );
   for (const d of report.discord) lines.push(`  discord    ${d.slot.padEnd(10)} ${d.when}`);
+  for (const r of report.reddit ?? []) {
+    lines.push(`  reddit     ${r.slot.padEnd(10)} r/${r.sub}`);
+  }
   if (report.image) lines.push(`  grid       ${report.image.layout}, ${report.image.width}x${report.image.height}`);
   if (report.imageError) lines.push(`  grid       not built. ${report.imageError}`);
   if (report.errors.length) lines.push(`  errors: ${report.errors.join('; ')}`);

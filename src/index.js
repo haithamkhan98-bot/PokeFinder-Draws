@@ -27,6 +27,7 @@ import { startBestbuyScheduler } from './bestbuy-schedule.js';
 import { probeListing, formatProbe } from './target.js';
 import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-raffle.js';
 import { runTargetRaffle, summariseTarget } from './target-run.js';
+import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setTargetRunCloseTime } from './db.js';
 
 const {
@@ -49,6 +50,7 @@ const {
   // there is no deadline to race: the draw is already open and runs for days,
   // so waiting costs nothing and firing early splits one draw into two runs.
   TARGET_QUIET_PERIOD_MS = 600_000,
+  TARGET_TICK_MS = 300_000,
   DISCORD_MEMBER_CHANNEL_ID,
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
@@ -1408,6 +1410,47 @@ client.on(Events.MessageCreate, async (message) => {
   }
 });
 
+/**
+ * The reminder ticker.
+ *
+ * Target draws run for days, so the reminders cannot be written at
+ * announcement time: by the time one fires, Target may have pulled half the
+ * listings. Each pass looks for a reminder coming due, re-checks every listing
+ * in that run, and only then builds the post.
+ *
+ * Deliberately serial. Two overlapping passes would both see the same reminder
+ * as unposted and create it twice, and Buffer has no way to tell that the
+ * second is a duplicate of the first.
+ */
+function startTargetTicker() {
+  let running = false;
+  const pass = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const did = await tickTargetReminders({
+        asDraft: !flag(TARGET_LIVE),
+        alert,
+      });
+      for (const d of did) {
+        if (d.action === 'completed') {
+          console.log(`target run #${d.runId} closed${d.why ? `, ${d.why}` : ''}`);
+        } else {
+          console.log(`target run #${d.runId} reminder(s) ${d.slots.join(', ')} created`);
+        }
+      }
+    } catch (err) {
+      // Logged rather than alerted: a failing tick retries in minutes, and a
+      // database hiccup every five minutes would bury the alert channel.
+      console.error(`target reminder tick failed: ${err.message}`);
+    } finally {
+      running = false;
+    }
+  };
+  setInterval(pass, Number(TARGET_TICK_MS)).unref?.();
+  pass();
+}
+
 client.once(Events.ClientReady, (c) => {
   console.log(`listening as ${c.user.tag} on channel ${WALMART_CHANNEL_ID}`);
   if (DISCORD_MEMBER_CHANNEL_ID) {
@@ -1450,6 +1493,8 @@ client.once(Events.ClientReady, (c) => {
   }
   if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID) {
     console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}`);
+    startTargetTicker();
+    console.log(`target reminders are checked every ${Number(TARGET_TICK_MS) / 1000}s, built ${LEAD_MS / 60_000}min ahead`);
   } else {
     console.log('target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
   }

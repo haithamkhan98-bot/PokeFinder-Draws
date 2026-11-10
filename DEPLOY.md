@@ -1006,3 +1006,82 @@ full length:
 The shortener now runs over the naming step's `postName` as well as the raw
 title, so a long name from naming gets trimmed instead of passing straight
 through.
+
+## Target raffles
+
+Target now runs draws on individual product listings rather than one catchall
+page, which changes the shape of the automation in three ways: there is no
+single link to post, the draw is live the moment the monitor sees it, and the
+membership of a draw changes while it runs.
+
+### Variables
+
+| Name | What it does |
+| --- | --- |
+| `TARGET_CHANNEL_ID` | The Discord channel the Target Raffles monitor posts into. Required; without it the whole Target path stays off. |
+| `TARGET_ENABLED` | `true` to read that channel. Off by default. |
+| `TARGET_LIVE` | `true` to publish and schedule. Off means every post is created as a Buffer draft instead, which is how the first real draw should be watched. |
+| `TARGET_QUIET_PERIOD_MS` | How long to wait for more listings before firing a run. Default 600000 (10 minutes). Target posts a draw's listings over several minutes, and each one arrives as its own embed. |
+| `TARGET_TICK_MS` | How often to look for a reminder coming due. Default 300000 (5 minutes). |
+| `TARGET_CLOSE_KEY` | The key the bookmarklet signs its close-time report with. Set it to a fixed value, or it regenerates on every deploy and the bookmark in the bar stops working. |
+
+### Rollout
+
+1. Set `TARGET_CHANNEL_ID` and `TARGET_ENABLED=true`, leaving `TARGET_LIVE`
+   unset. The next draw produces a full set of Buffer drafts and an alert, and
+   nothing reaches an audience.
+2. Read the drafts. Check the item list against the Discord embeds, the ranking
+   against the set priority, and the grid against the listings.
+3. Set `TARGET_LIVE=true`.
+
+### The close time comes from the bookmarklet
+
+Target shows a draw's close time only to a signed-in visitor, so the bot cannot
+read it. The window is also absent from the signed-out page in any form: every
+ISO timestamp in it is an experiment-flag expiry, every epoch is a React Query
+cache stamp, and the one stray `22:00:00` is store hours.
+
+So HK clicks a bookmarklet on the listing page and it reports the close time
+back. `GET /target/bookmarklet?key=$SETUP_KEY` hands out the bookmark to drag,
+and the bookmarklet itself posts to `/target/close`. Changing
+`bookmarkletSource` means re-dragging the bookmark, because the code lives in
+the bookmark rather than on the server.
+
+Times are read as Central and converted, because Target is Minneapolis-based
+and writes its copy that way ("Enter by 10am CT on Nov 11" is 11am ET). The
+conversion goes through the IANA zone `America/Chicago` rather than a fixed
+offset, so a draw either side of a DST boundary lands on the right hour.
+
+### Reminders are built late, on purpose
+
+A Target draw runs for days, and Target adds and removes listings while it is
+open. Reminders are therefore NOT created at announcement time: the ticker
+finds each one about 15 minutes before it is due, re-checks every listing in
+the run, and only then writes the post. A reminder built on Monday would
+otherwise still be sending people on Wednesday to listings nobody can enter.
+
+Removal is read from `fast_selling.queue_gated` in the listing's
+`__NEXT_DATA__`, which Target serves to Railway's datacenter IP under an honest
+bot User-Agent. Only an explicit `false` counts as pulled. Anything
+unreadable — a timeout, a bot wall, a changed page shape — is recorded as
+unreadable and removes nothing, and if every listing in a run is unreadable the
+run is left intact. Target refusing to answer is not the same as a draw being
+emptied, and the expensive mistake is dropping a product people can still
+enter.
+
+If every listing really has been pulled, the run is closed and an alert says so
+rather than a reminder going out for nothing.
+
+### The grid
+
+Composited locally with sharp through the same `buildGrid` the queue uses, not
+through Canva: the picture is product photos on a background with no text, so a
+template adds nothing and the canvas has to scale with the item count anyway.
+
+The announcement's grid is reused by a reminder only while membership is
+unchanged. Once anything has been pulled the grid is rebuilt, since the picture
+is what most people read before the text.
+
+A grid that fails to build does not stop the post. Every link and the close
+time are in the text, so a failed picture costs reach rather than the
+announcement.

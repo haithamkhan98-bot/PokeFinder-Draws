@@ -643,3 +643,20 @@ export async function recordTargetPost({ runId, slot, channelId, bufferPostId })
   );
 }
 
+/** Every run still open, oldest first, for the reminder ticker. */
+export async function openTargetRuns() {
+  const { rows } = await pool.query(
+    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+       FROM target_runs WHERE completed_at IS NULL ORDER BY opened_at`,
+  );
+  return rows;
+}
+
+/** Which slots a run has already posted, so a ticker never doubles up. */
+export async function targetRunSlots(runId) {
+  const { rows } = await pool.query(
+    'SELECT DISTINCT slot FROM target_posts WHERE run_id = $1', [runId],
+  );
+  return new Set(rows.map((r) => r.slot));
+}
+

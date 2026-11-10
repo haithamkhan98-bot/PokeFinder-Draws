@@ -31,6 +31,25 @@ export function raffleItemLines(items) {
 const body = (...blocks) => blocks.filter(Boolean).join('\n\n');
 
 /**
+ * 9AM the morning after a draw opens, or null when that is not a sensible
+ * moment to say anything.
+ *
+ * Skipped when it lands after the close, or inside the final hour, since the
+ * closing post already covers that stretch and two posts minutes apart read
+ * as one message sent twice.
+ *
+ * Exported so the ticker and the copy agree on when it is. Two separate
+ * calculations would drift, and the symptom would be a reminder that is never
+ * built or one built twice.
+ */
+export function morningReminderAt(openedAt, closesAt) {
+  if (!closesAt) return null;
+  const morning = openedAt.setZone('America/New_York').plus({ days: 1 })
+    .set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
+  return morning < closesAt.minus({ hours: 1 }) ? morning : null;
+}
+
+/**
  * The three beats.
  *
  * `closesAt` is optional and comes from HK by command, because Target only
@@ -55,10 +74,8 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
 
   if (!closesAt) return posts;
 
-  const morning = now.setZone('America/New_York').plus({ days: 1 }).set({
-    hour: 9, minute: 0, second: 0, millisecond: 0,
-  });
-  if (morning < closesAt.minus({ hours: 1 })) {
+  const morning = morningReminderAt(now, closesAt);
+  if (morning) {
     posts.push({
       slot: 'morning',
       dueAt: morning,

@@ -1174,6 +1174,77 @@ async function redditCrosspost(message, args) {
   }
 }
 
+/**
+ * `!targetscan [n]` reads recent Target channel history and starts a run.
+ *
+ * Discord never replays messages a bot could not see at the time, so a
+ * permission problem or an outage during a raffle loses it permanently: the
+ * embeds sit in the channel and the bot will never hear about them. That is
+ * not hypothetical, it is how the first live Target raffle was missed.
+ *
+ * Feeds the same batcher the live handler uses, so a scan and a live embed
+ * land in one run rather than two. Items already held are reported as repeats
+ * rather than added twice.
+ */
+async function targetScan(message, raw) {
+  if (!TARGET_CHANNEL_ID) {
+    await message.reply('TARGET_CHANNEL_ID is not set, so there is no channel to scan.');
+    return;
+  }
+  if (!flag(TARGET_ENABLED)) {
+    await message.reply('TARGET_ENABLED is off, so a scan would collect items nothing would post.');
+    return;
+  }
+
+  const limit = Math.min(Math.max(parseInt(raw, 10) || 50, 1), 100);
+  try {
+    const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply(`Channel ${TARGET_CHANNEL_ID} is not a text channel the bot can read.`);
+      return;
+    }
+
+    const fetched = await channel.messages.fetch({ limit });
+    // Oldest first, so the batcher sees them in the order they were posted.
+    const ordered = [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+
+    const added = [];
+    const repeats = [];
+    const skipped = [];
+    let held = 0;
+
+    for (const m of ordered) {
+      for (const embed of m.embeds ?? []) {
+        if (!isRaffleEmbed(embed)) {
+          skipped.push(`"${embed?.author?.name ?? 'no author'}" [${(embed?.fields ?? []).map((f) => f.name).join(', ') || 'no fields'}]`);
+          continue;
+        }
+        const t = parseTargetRaffle(embed, { now: DateTime.now() });
+        if (!t) { skipped.push('a raffle embed with no usable tcin or title'); continue; }
+        const r = targetBatcher.add(t);
+        held = r.size;
+        (r.joined ? added : repeats).push(`${t.productName} (${t.tcin})`);
+      }
+    }
+
+    const uniqueSkips = [...new Set(skipped)];
+    await message.reply(
+      `Scanned the last ${ordered.length} message(s) in the Target channel.\n`
+      + `Added ${added.length}, already held ${repeats.length}, ${held} now in the run.\n`
+      + (added.length ? `\n**Added**\n${added.join('\n')}\n` : '')
+      + (uniqueSkips.length
+        ? `\n**Not raffles** (${skipped.length} embed(s), ${uniqueSkips.length} shape(s))\n`
+          + uniqueSkips.slice(0, 5).join('\n')
+        : '')
+      + (added.length
+        ? `\n\nThe run fires after ${Number(TARGET_QUIET_PERIOD_MS) / 60000} minutes of quiet.`
+        : ''),
+    );
+  } catch (err) {
+    await message.reply(`Could not scan the Target channel: ${err.message}`);
+  }
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1407,6 +1478,9 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!bbruns$/i.test(content)) { await bestbuyRuns(message); return; }
     if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
+
+    const tscan = content.match(/^!targetscan(?:\s+(\d+))?$/i);
+    if (tscan) { await targetScan(message, tscan[1]); return; }
 
     const tprobe = content.match(/^!targetprobe\b(.*)$/i);
     if (tprobe) { await targetProbe(message, tprobe[1]); return; }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
 import { isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems } from '../src/target-raffle.js';
-import { buildRafflePosts, raffleItemLines, closeLine } from '../src/target-copy.js';
+import { buildRafflePosts, raffleItemLines, deadlineClause } from '../src/target-copy.js';
 
 const now = DateTime.fromISO('2026-11-09T11:00', { zone: 'America/New_York' });
 
@@ -99,7 +99,13 @@ test('the morning reminder is skipped when it lands inside the final hour', () =
   assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
 });
 
-const SAMPLE = [parseTargetRaffle(embed(), { now })];
+// As runTargetRaffle has it: the parsed embed merged with the naming step's
+// set and postName, which is what the copy actually receives.
+const SAMPLE = [{
+  ...parseTargetRaffle(embed(), { now }),
+  set: '30th Celebration',
+  postName: '30th Celebration Booster Bundle Box',
+}];
 
 test('every beat states the deadline, which is why the close time is collected', () => {
   // Target writes its copy in Central ("Enter by 10am CT"), so the posts have
@@ -108,23 +114,30 @@ test('every beat states the deadline, which is why the close time is collected',
   const posts = buildRafflePosts({ items: SAMPLE, now, closesAt });
 
   assert.equal(posts.length, 3);
-  for (const p of posts) {
-    assert.match(p.text, /⏰ Enter by 11AM EST \/ 8AM PST on Wed 11\/11/, `${p.slot} states the deadline`);
-  }
+  // The deadline belongs in the opening line, where someone scrolling sees it.
+  const first = (p) => p.text.split('\n')[0];
+  assert.equal(
+    first(posts[0]),
+    '💫 Target 30th Celebration Draws Are Live Now! Entries Accepted by November 11 at 11AM EST / 8AM PST!',
+  );
+  assert.match(first(posts[1]), /Still Open! Entries Accepted by November 11 at 11AM EST \/ 8AM PST!$/);
+  // Inside the final hour the date is noise.
+  assert.equal(first(posts[2]), '💫 1 Hour Left to Enter the Target 30th Celebration Draws! Entries Close at 11AM EST / 8AM PST!');
+  for (const p of posts) assert.doesNotMatch(p.text, /⏰/, 'no separate deadline block');
 });
 
 test('without a close time the announcement still goes out, with no deadline line', () => {
   const posts = buildRafflePosts({ items: SAMPLE, now, closesAt: null });
   assert.deepEqual(posts.map((p) => p.slot), ['live']);
-  assert.doesNotMatch(posts[0].text, /Enter by/);
-  assert.doesNotMatch(posts[0].text, /⏰/, 'no empty deadline marker is left behind');
+  assert.equal(posts[0].text.split('\n')[0], '💫 Target 30th Celebration Draws Are Live Now!');
+  assert.doesNotMatch(posts[0].text, /Entries/, 'no dangling deadline clause');
 });
 
-test('closeLine crosses a DST boundary by zone rather than by offset', () => {
-  // 2026 DST ends Nov 1. A draw closing either side must name the right hour.
-  const before = closeLine(DateTime.fromISO('2026-10-28T10:00', { zone: 'America/Chicago' }));
-  const after = closeLine(DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' }));
-  assert.match(before, /11AM EST \/ 8AM PST/);
-  assert.match(after, /11AM EST \/ 8AM PST/);
-  assert.equal(closeLine(null), null);
+test('the deadline crosses a DST boundary by zone rather than by offset', () => {
+  // 2026 DST ends Nov 1. 10am Central must come out as 11AM Eastern either side.
+  const before = deadlineClause(DateTime.fromISO('2026-10-28T10:00', { zone: 'America/Chicago' }));
+  const after = deadlineClause(DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' }));
+  assert.match(before, /October 28 at 11AM EST \/ 8AM PST/);
+  assert.match(after, /November 11 at 11AM EST \/ 8AM PST/);
+  assert.equal(deadlineClause(null), null);
 });

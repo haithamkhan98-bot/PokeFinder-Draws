@@ -195,3 +195,58 @@ CREATE TABLE IF NOT EXISTS target_close_times (
   raw         TEXT,
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Target raffle runs.
+--
+-- Unlike a Walmart draw or queue drop, a Target draw is not assembled once and
+-- then fixed. It is already open when the monitor sees it, it runs for days,
+-- and Target adds and removes listings while it runs. So a run stays open for
+-- the whole window and its membership is rebuilt before each post, rather than
+-- being frozen at first assembly.
+--
+-- closes_at is nullable because Target only shows the window to a signed in
+-- account. It arrives later, from the bookmarklet, and until it does the live
+-- announcement still goes out and only the reminders are missing.
+CREATE TABLE IF NOT EXISTS target_runs (
+  id            BIGSERIAL   PRIMARY KEY,
+  status        TEXT        NOT NULL DEFAULT 'collecting',
+  opened_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  closes_at     TIMESTAMPTZ,
+  headline      TEXT,
+  image_url     TEXT,
+  error         TEXT,
+  announced_at  TIMESTAMPTZ,
+  completed_at  TIMESTAMPTZ
+);
+
+-- Items are never deleted, only marked removed. A reminder needs to know what
+-- Target pulled so it can say so, and a deleted row cannot tell anyone that.
+CREATE TABLE IF NOT EXISTS target_items (
+  id             BIGSERIAL   PRIMARY KEY,
+  run_id         BIGINT      NOT NULL REFERENCES target_runs(id) ON DELETE CASCADE,
+  tcin           TEXT        NOT NULL,
+  raw_title      TEXT        NOT NULL,
+  product_name   TEXT,
+  set_name       TEXT,
+  link           TEXT        NOT NULL,
+  affiliate      BOOLEAN     NOT NULL DEFAULT false,
+  image_url      TEXT,
+  classification TEXT        NOT NULL,
+  seen_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  removed_at     TIMESTAMPTZ,
+  UNIQUE (run_id, tcin)
+);
+
+CREATE TABLE IF NOT EXISTS target_posts (
+  id             BIGSERIAL   PRIMARY KEY,
+  run_id         BIGINT      NOT NULL REFERENCES target_runs(id) ON DELETE CASCADE,
+  slot           TEXT        NOT NULL,
+  channel_id     TEXT        NOT NULL,
+  buffer_post_id TEXT        NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, slot, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS target_runs_open_idx
+  ON target_runs(opened_at DESC) WHERE completed_at IS NULL;
+CREATE INDEX IF NOT EXISTS target_items_run_idx ON target_items(run_id);

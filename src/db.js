@@ -523,3 +523,123 @@ export async function targetCloseTimeFor(tcins) {
   return rows[0] ?? null;
 }
 
+/* ---------------------------------------------------------------- Target */
+
+/**
+ * The run a newly seen Target listing belongs to.
+ *
+ * Target draws overlap and run for days, and new listings appear throughout.
+ * Any listing seen while a run is open joins it rather than starting a second
+ * one, which is what makes "Target added an item mid draw" work.
+ *
+ * Deliberately not enforced by a unique index. A constraint here would turn a
+ * surprise, two genuinely separate draws open at once, into failed inserts and
+ * lost items. Picking the newest open run degrades instead.
+ */
+export async function openTargetRun() {
+  const { rows } = await pool.query(
+    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+       FROM target_runs WHERE completed_at IS NULL
+      ORDER BY opened_at DESC LIMIT 1`,
+  );
+  return rows[0] ?? null;
+}
+
+export async function startTargetRun({ closesAt = null } = {}) {
+  const { rows } = await pool.query(
+    `INSERT INTO target_runs (closes_at) VALUES ($1)
+       RETURNING id, status, opened_at, closes_at`,
+    [closesAt],
+  );
+  return rows[0];
+}
+
+/**
+ * Add listings to a run, returning only the ones that were not already there.
+ *
+ * The caller needs that distinction: items added mid draw are worth saying out
+ * loud in the next reminder, and re-announcing the whole list every time an
+ * embed arrives would be noise.
+ *
+ * A listing Target pulled and then restored comes back by clearing removed_at,
+ * rather than being counted as new.
+ */
+export async function addTargetItems(runId, items) {
+  const added = [];
+  for (const i of items) {
+    const { rows } = await pool.query(
+      `INSERT INTO target_items
+         (run_id, tcin, raw_title, product_name, set_name, link, affiliate, image_url, classification)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (run_id, tcin) DO UPDATE
+          SET link = EXCLUDED.link,
+              affiliate = EXCLUDED.affiliate,
+              product_name = COALESCE(EXCLUDED.product_name, target_items.product_name),
+              set_name = COALESCE(EXCLUDED.set_name, target_items.set_name),
+              removed_at = NULL
+       RETURNING tcin, (xmax = 0) AS inserted`,
+      [runId, String(i.tcin), i.rawTitle, i.productName ?? null, i.set ?? null,
+       i.link, Boolean(i.affiliate), i.image ?? null, i.classification ?? 'pokemon'],
+    );
+    if (rows[0]?.inserted) added.push(rows[0].tcin);
+  }
+  return added;
+}
+
+/** Mark listings Target has pulled. Returns the ones that changed state. */
+export async function markTargetItemsRemoved(runId, tcins) {
+  if (!tcins?.length) return [];
+  const { rows } = await pool.query(
+    `UPDATE target_items SET removed_at = now()
+      WHERE run_id = $1 AND tcin = ANY($2) AND removed_at IS NULL
+      RETURNING tcin`,
+    [runId, tcins.map(String)],
+  );
+  return rows.map((r) => r.tcin);
+}
+
+/** A run's listings. Removed ones are left out unless asked for. */
+export async function targetRunItems(runId, { includeRemoved = false } = {}) {
+  const { rows } = await pool.query(
+    `SELECT tcin, raw_title, product_name, set_name, link, affiliate,
+            image_url, classification, seen_at, removed_at
+       FROM target_items
+      WHERE run_id = $1 ${includeRemoved ? '' : 'AND removed_at IS NULL'}
+      ORDER BY seen_at`,
+    [runId],
+  );
+  return rows;
+}
+
+export async function setTargetRunCloseTime(runId, closesAt) {
+  const { rows } = await pool.query(
+    'UPDATE target_runs SET closes_at = $2 WHERE id = $1 RETURNING id, closes_at',
+    [runId, closesAt],
+  );
+  return rows[0] ?? null;
+}
+
+export async function markTargetRunAnnounced(runId, { headline, imageUrl }) {
+  await pool.query(
+    `UPDATE target_runs
+        SET status = 'live', announced_at = now(), headline = $2, image_url = $3
+      WHERE id = $1`,
+    [runId, headline ?? null, imageUrl ?? null],
+  );
+}
+
+export async function completeTargetRun(runId, error = null) {
+  await pool.query(
+    `UPDATE target_runs SET completed_at = now(), status = 'done', error = $2 WHERE id = $1`,
+    [runId, error],
+  );
+}
+
+export async function recordTargetPost({ runId, slot, channelId, bufferPostId }) {
+  await pool.query(
+    `INSERT INTO target_posts (run_id, slot, channel_id, buffer_post_id)
+     VALUES ($1,$2,$3,$4) ON CONFLICT (run_id, slot, channel_id) DO NOTHING`,
+    [runId, slot, String(channelId), String(bufferPostId)],
+  );
+}
+

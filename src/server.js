@@ -34,6 +34,21 @@ export function imageUrl(id) {
   return base ? `${base}/images/${id}.png` : null;
 }
 
+/**
+ * Lets the bookmarklet read this service's reply.
+ *
+ * It runs on target.com and calls here, which is cross origin. The browser
+ * sends a plain GET like that regardless, so without these headers the close
+ * time still saves and only the answer is withheld: the bookmarklet reports
+ * "Failed to fetch" for a request that worked, which is the worst of both.
+ *
+ * `*` rather than target.com specifically. The route carries no cookies, so
+ * there is nothing for another origin to ride on, and the key is what guards
+ * it. Naming one origin would also break the moment Target serves a page from
+ * a different one.
+ */
+const CORS = { 'access-control-allow-origin': '*' };
+
 const ID_RE = /^\/images\/([0-9a-f]{32})\.png$/;
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
@@ -117,17 +132,17 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
       if (path === '/target/close') {
         const url = new URL(req.url, 'http://localhost');
         if (url.searchParams.get('key') !== closeKey) {
-          res.writeHead(403, { 'content-type': 'text/plain' }).end('Wrong or missing key.');
+          res.writeHead(403, { ...CORS, 'content-type': 'text/plain' }).end('Wrong or missing key.');
           return;
         }
         const tcin = (url.searchParams.get('tcin') ?? '').trim();
         if (!/^\d{6,}$/.test(tcin)) {
-          res.writeHead(400, { 'content-type': 'text/plain' }).end('Need a tcin.');
+          res.writeHead(400, { ...CORS, 'content-type': 'text/plain' }).end('Need a tcin.');
           return;
         }
         const parsed = parseCloseInput(url.searchParams.get('closes'));
         if (!parsed.ok) {
-          res.writeHead(400, { 'content-type': 'text/plain' }).end(`Not saved: ${parsed.reason}`);
+          res.writeHead(400, { ...CORS, 'content-type': 'text/plain' }).end(`Not saved: ${parsed.reason}`);
           return;
         }
         await setTargetCloseTime({
@@ -135,7 +150,7 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
           closesAt: parsed.closesAt.toJSDate(),
           raw: url.searchParams.get('raw') || null,
         });
-        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.writeHead(200, { ...CORS, 'content-type': 'text/plain' })
           .end(`Saved. TCIN ${tcin} closes ${parsed.closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET.`);
         return;
       }

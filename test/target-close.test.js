@@ -38,3 +38,14 @@ test('the bookmarklet carries the endpoint and key, and asks before sending', ()
   assert.match(src, /prompt\(/);
   assert.match(bookmarkletUrl('https://example.up.railway.app', 'k3y'), /^javascript:/);
 });
+
+test('the bookmarklet url survives being put in an href attribute', () => {
+  // The page escapes it with a helper that handles < > &, and the url is
+  // percent encoded, so there must be no raw quote to break out of the
+  // attribute. A broken attribute here produces a bookmark that looks fine
+  // and silently does nothing.
+  const href = bookmarkletUrl('https://example.up.railway.app', 'k3y');
+  assert.equal(href.includes('"'), false);
+  assert.equal(href.includes("'"), false);
+  assert.equal(href.includes(' '), false);
+});

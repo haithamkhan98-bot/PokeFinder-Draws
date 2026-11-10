@@ -38,6 +38,23 @@ const ID_RE = /^\/images\/([0-9a-f]{32})\.png$/;
 
 const esc = (s) => String(s).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
 
+/**
+ * A page whose body is already HTML.
+ *
+ * `page` escapes its body, which is right for the Canva routes since they pass
+ * plain sentences. The bookmarklet page needs a real anchor, so it needs a
+ * variant that does not escape. Kept separate rather than adding a flag to
+ * `page`, so that the escaping one stays the default and nothing starts
+ * emitting unescaped text by forgetting an argument.
+ */
+function pageHtml(res, status, title, bodyHtml) {
+  res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(
+    `<!doctype html><meta charset="utf-8"><title>${esc(title)}</title>`
+    + `<body style="font:16px/1.5 system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem">`
+    + `<h1 style="font-size:1.3rem">${esc(title)}</h1>${bodyHtml}</body>`,
+  );
+}
+
 function page(res, status, title, body) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }).end(
     `<!doctype html><meta charset="utf-8"><title>${esc(title)}</title>`
@@ -76,14 +93,23 @@ export function startServer({ port = process.env.PORT ?? 3000 } = {}) {
           page(res, 500, 'Target close time', '<p>No public URL for this service yet.</p>');
           return;
         }
-        page(res, 200, 'Target close time', [
-          '<p>Drag this to your bookmarks bar:</p>',
-          `<p><a href="${esc(bookmarkletUrl(base, closeKey))}">Target draw close</a></p>`,
+        const href = bookmarkletUrl(base, closeKey);
+        pageHtml(res, 200, 'Target close time', [
+          '<p>Drag this onto your bookmarks bar:</p>',
+          `<p style="margin:1.5rem 0"><a href="${esc(href)}"`,
+          ' style="display:inline-block;padding:.6rem 1rem;border:1px solid #888;',
+          'border-radius:6px;text-decoration:none;font-weight:600">Target draw close</a></p>',
           '<p>Then, on a Target listing that is drawing, while signed in, click it.',
           ' It reads the close time off the page, shows you what it found, and sends it here.</p>',
-          '<p>If it finds nothing, paste the time in yourself and it will still be saved.',
-          ' Either way it posts back what it saw, so the guessing can be replaced',
-          ' with something exact once a few have come through.</p>',
+          // Chrome sometimes refuses to drag a javascript: link, and silently
+          // drops it rather than saying so. The textarea is the way out.
+          '<p>If dragging does not work, add a bookmark by hand and paste this',
+          ' as its address:</p>',
+          `<textarea readonly rows="4" style="width:100%;font:12px/1.4 ui-monospace,monospace"`,
+          ` onclick="this.select()">${esc(href)}</textarea>`,
+          '<p style="color:#666;font-size:.9rem">If it finds nothing on the page, type the time',
+          ' in yourself and it still saves. Either way it sends back the text it read, so the',
+          ' guessing can be replaced with something exact once a few have come through.</p>',
         ].join(''));
         return;
       }

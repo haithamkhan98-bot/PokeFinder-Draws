@@ -1085,3 +1085,21 @@ is what most people read before the text.
 A grid that fails to build does not stop the post. Every link and the close
 time are in the text, so a failed picture costs reach rather than the
 announcement.
+
+### Naming: the series prefix
+
+"Mega Evolution" is a master set with sets of its own under it, and the posts
+name the set rather than the series. `Mega Evolution Delta Reign Elite Trainer
+Box` is written `Delta Reign Elite Trainer Box`: the prefix is long and would
+repeat on every line of a post.
+
+It is stripped only when another known set follows it, because the master set
+has its own products too and `Mega Evolution Elite Trainer Box` is that
+product's real name. Dropping the prefix there would leave a bare "Elite
+Trainer Box" with no set at all.
+
+This replaced the dash-only rule the BestBuy titles needed. Target and Walmart
+write the same thing with a space rather than a dash, so matching on the
+following set name covers every retailer with one rule instead of one per
+retailer. A new set under Mega Evolution needs adding to `KNOWN_SETS` to be
+recognised; the strip then follows automatically.

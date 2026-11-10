@@ -1,4 +1,4 @@
-import { orderedItems, orderedSets, joinEnglish, timeLabel, shortDate } from './copy.js';
+import { orderedItems, orderedSets, joinEnglish, timeLabel } from './copy.js';
 
 /**
  * Copy for Target raffles.
@@ -22,20 +22,26 @@ export function raffleHeadline(items) {
 }
 
 /**
- * The deadline, in the house format the draw posts already use.
+ * The deadline, as a clause for the opening line rather than a block of its
+ * own.
  *
- * This is the whole reason the close time is collected by hand at all. A
- * Target draw runs for days, so unlike a Walmart draw the thing a reader needs
- * is not when it starts but when it stops, and a post that says "live now"
- * without a deadline leaves them to work it out on the listing page.
+ * This is the whole reason the close time is collected by hand. A Target draw
+ * runs for days, so unlike a Walmart draw the thing a reader needs is not when
+ * it starts but when it stops, and it belongs in the first line where someone
+ * scrolling past will see it.
  *
- * Both zones and the weekday are stated. A draw that opens on Monday and
- * closes on Wednesday makes a bare clock time ambiguous.
+ * The date is stated as well as the clock. A draw that opens Monday and closes
+ * Wednesday makes a bare time ambiguous.
  */
-export function closeLine(closesAt) {
+export function deadlineClause(closesAt) {
   if (!closesAt) return null;
   const et = closesAt.setZone('America/New_York');
-  return `⏰ Enter by ${timeLabel(closesAt)} on ${et.toFormat('ccc')} ${shortDate(closesAt)}`;
+  return `Entries Accepted by ${et.toFormat('LLLL d')} at ${timeLabel(closesAt)}!`;
+}
+
+/** Inside the final hour the date is noise: the reader is deciding right now. */
+export function closingClause(closesAt) {
+  return closesAt ? `Entries Close at ${timeLabel(closesAt)}!` : null;
 }
 
 /** One line per item: name then its own entry link. */
@@ -86,7 +92,10 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'live',
     dueAt: null,
     discord: true,
-    text: body(`💫 Target ${headline} Draws Are Live Now!`, list, closeLine(closesAt), BOOKMARK, TAGS),
+    text: body(
+      [`💫 Target ${headline} Draws Are Live Now!`, deadlineClause(closesAt)].filter(Boolean).join(' '),
+      list, BOOKMARK, TAGS,
+    ),
   });
 
   if (!closesAt) return posts;
@@ -97,7 +106,10 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
       slot: 'morning',
       dueAt: morning,
       discord: false,
-      text: body(`💫 Reminder: The Target ${headline} Draws Are Still Open!`, list, closeLine(closesAt), BOOKMARK, TAGS),
+      text: body(
+        `💫 Reminder: The Target ${headline} Draws Are Still Open! ${deadlineClause(closesAt)}`,
+        list, BOOKMARK, TAGS,
+      ),
     });
   }
 
@@ -105,7 +117,10 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'closing',
     dueAt: closesAt.minus({ hours: 1 }),
     discord: true,
-    text: body(`💫 1 Hour Left to Enter the Target ${headline} Draws!`, list, closeLine(closesAt), TAGS),
+    text: body(
+      `💫 1 Hour Left to Enter the Target ${headline} Draws! ${closingClause(closesAt)}`,
+      list, TAGS,
+    ),
   });
 
   return posts;

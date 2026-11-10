@@ -250,3 +250,28 @@ CREATE TABLE IF NOT EXISTS target_posts (
 CREATE INDEX IF NOT EXISTS target_runs_open_idx
   ON target_runs(opened_at DESC) WHERE completed_at IS NULL;
 CREATE INDEX IF NOT EXISTS target_items_run_idx ON target_items(run_id);
+
+-- Member facing Discord posts for Target raffles.
+--
+-- A separate table from discord_posts rather than a source column on it,
+-- because that table's run_id is a foreign key into draw_runs and a Target run
+-- id would violate it. Dropping the key to share one table would trade real
+-- integrity for a saved table.
+CREATE TABLE IF NOT EXISTS target_discord_posts (
+  id         BIGSERIAL PRIMARY KEY,
+  run_id     BIGINT      NOT NULL REFERENCES target_runs(id) ON DELETE CASCADE,
+  slot       TEXT        NOT NULL,
+  channel_id TEXT        NOT NULL,
+  due_at     TIMESTAMPTZ NOT NULL,
+  body       TEXT        NOT NULL,
+  image_url  TEXT,
+  posted_at  TIMESTAMPTZ,
+  message_id TEXT,
+  error      TEXT,
+  attempts   INTEGER     NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (run_id, slot)
+);
+
+CREATE INDEX IF NOT EXISTS target_discord_posts_due_idx
+  ON target_discord_posts(due_at) WHERE posted_at IS NULL;

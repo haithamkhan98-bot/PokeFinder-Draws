@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
 import { isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems } from '../src/target-raffle.js';
-import { buildRafflePosts, raffleItemLines, deadlineClause } from '../src/target-copy.js';
+import { buildRafflePosts, raffleItemLines, deadlineClause, targetDiscordPosts } from '../src/target-copy.js';
 
 const now = DateTime.fromISO('2026-11-09T11:00', { zone: 'America/New_York' });
 
@@ -140,4 +140,45 @@ test('the deadline crosses a DST boundary by zone rather than by offset', () => 
   assert.match(before, /October 28 at 11AM EST \/ 8AM PST/);
   assert.match(after, /November 11 at 11AM EST \/ 8AM PST/);
   assert.equal(deadlineClause(null), null);
+});
+
+const closesAt = DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' });
+
+test('the member Discord posts are the live and closing beats only', () => {
+  const posts = targetDiscordPosts({ items: SAMPLE, now, closesAt, role: '<@&123>' });
+  assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
+  // Not the morning one: members got the announcement and will get the hour
+  // warning, and a third ping is what makes people mute a role.
+  assert.ok(!posts.some((p) => p.slot === 'morning'));
+});
+
+test('the member posts use Discord timestamps rather than a written clock time', () => {
+  const epoch = Math.floor(closesAt.toSeconds());
+  const [live, closing] = targetDiscordPosts({ items: SAMPLE, now, closesAt, role: '<@&123>' });
+  assert.match(live.text, new RegExp(`<t:${epoch}:F>`), 'renders in each member\'s own timezone');
+  assert.match(live.text, new RegExp(`<t:${epoch}:R>`), 'and counts itself down');
+  assert.match(closing.text, new RegExp(`<t:${epoch}:R>`));
+  assert.doesNotMatch(live.text, /11AM EST/, 'a written time would go stale across days');
+});
+
+test('the member posts ping with the role ID, since the literal text does not', () => {
+  const [live] = targetDiscordPosts({ items: SAMPLE, now, closesAt, role: '<@&123>' });
+  assert.match(live.text, /<@&123>/);
+});
+
+test('the closing member post is due an hour before the close', () => {
+  const [, closing] = targetDiscordPosts({ items: SAMPLE, now, closesAt });
+  assert.equal(closing.dueAt.toMillis(), closesAt.minus({ hours: 1 }).toMillis());
+});
+
+test('every item carries its own link, because Target has no catchall page', () => {
+  const [live] = targetDiscordPosts({ items: SAMPLE, now, closesAt });
+  assert.match(live.text, /- \[30th Celebration Booster Bundle Box\]\(https:\/\/[^)]+\)/);
+  assert.doesNotMatch(live.text, /Draw Link/, 'the Walmart footer has no Target equivalent');
+});
+
+test('with no close time there are no member posts', () => {
+  // The whole post is built around the deadline countdown, so there is nothing
+  // to say without one. The tweets still go out.
+  assert.deepEqual(targetDiscordPosts({ items: SAMPLE, now, closesAt: null }), []);
 });

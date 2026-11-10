@@ -1103,3 +1103,28 @@ write the same thing with a space rather than a dash, so matching on the
 following set name covers every retailer with one rule instead of one per
 retailer. A new set under Mega Evolution needs adding to `KNOWN_SETS` to be
 recognised; the strip then follows automatically.
+
+### The member Discord posts
+
+Two per draw, live and closing, matching the `discord` flags on the beats. The
+morning reminder deliberately gets no Discord post: members already had the
+announcement and will get the hour warning, and a third ping on a draw they
+have had a day to enter is what makes people mute a role.
+
+They go through a durable queue in Postgres, the same way the Walmart member
+posts do, so a redeploy cannot lose one. Target keeps its own
+`target_discord_posts` table rather than a `source` column on `discord_posts`,
+because that table's `run_id` is a foreign key into `draw_runs` and a Target
+run id would violate it. Sharing one table would have meant dropping that key:
+real integrity traded for a saved table.
+
+One scheduler serves both queues. Each claimed row carries its `source`, so
+there is one retry policy rather than two poll loops drifting out of step.
+
+Close times are Discord timestamps (`<t:epoch:F>`), not written-out clock
+times. They render in each member's own timezone and count themselves down, so
+a post written Monday still reads correctly on Wednesday.
+
+Member posts are queued only when `TARGET_LIVE` is set. Drafts are for reading
+in Buffer, and a Discord ping cannot be taken back. With no
+`DISCORD_MEMBER_CHANNEL_ID` they are skipped rather than queued to nowhere.

@@ -442,6 +442,10 @@ const targetBatcher = new Batcher({
         closesAt,
         asDraft: !flag(TARGET_LIVE),
         publishLive: flag(TARGET_LIVE),
+        // Member posts only once the whole path is live. Drafts are for
+        // reading in Buffer; a Discord ping cannot be taken back.
+        discordChannelId: flag(TARGET_LIVE) ? (DISCORD_MEMBER_CHANNEL_ID ?? null) : null,
+        discordRole: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
       });
 
       await alert(
@@ -1430,6 +1434,8 @@ function startTargetTicker() {
     try {
       const did = await tickTargetReminders({
         asDraft: !flag(TARGET_LIVE),
+        discordChannelId: flag(TARGET_LIVE) ? (DISCORD_MEMBER_CHANNEL_ID ?? null) : null,
+        discordRole: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
         alert,
       });
       for (const d of did) {

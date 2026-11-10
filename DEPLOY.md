@@ -1240,3 +1240,57 @@ No approve step: the bot does not moderate those subs.
 
 Two posts per tick and a two second gap between them. Consecutive submissions
 from one account inside a second is what Reddit's spam heuristics look for.
+
+## Walmart affiliate links from the sheet
+
+A monitor embed carries an affiliate link only when HK set it by hand, so most
+queue and draw items arrived with none and posted as plain PokeFinder URLs,
+earning nothing even when a link already existed in the sheet. This closes
+that gap.
+
+| Name | What it does |
+| --- | --- |
+| `WALMART_SHEET_CSV` | The Walmart tab's "publish to web" CSV URL. Unset, every item uses its plain link, exactly as before. |
+
+### Why the published CSV and not the Sheets API
+
+No credential in Railway and no service account, at the cost of being read
+only and lagging HK's edits by Google's cache, roughly five minutes. The bot
+never writes, and a link added minutes before a drop is an edge case HK fixes
+by hand. Moving to a service account later changes how the rows are fetched
+and nothing else.
+
+### Resolution order
+
+1. An affiliate link on the embed. HK set that for this drop, so it is the
+   most specific thing known about the item.
+2. The sheet, keyed on SKU.
+3. The standard PokeFinder URL built from the PID.
+
+### What it is careful about
+
+The Set column is populated only on the first row of each block, so it is
+carried down. Reading it per row is how two 30th Celebration SKUs were once
+reported as belonging to no set at all.
+
+`[AFFILIATE LINK NEEDED]` in the affiliate cell counts as no link. Posting the
+placeholder as a URL would be worse than posting none.
+
+A missing SKU or Affiliate Link column throws rather than returning an empty
+map, because an empty map is indistinguishable from "no links known" and would
+quietly post plain URLs for everything. Column headers are matched on a
+substring, so renaming "Affiliate Link" to "Affiliate Links" is fine.
+
+An unpublished sheet answers with an HTML error page and HTTP 200, which would
+otherwise parse as one nonsense row, so that is detected.
+
+A failed refresh serves the last good copy. A drop with slightly stale links
+beats a drop with none. A sheet that cannot be read at all never stops a drop
+posting: items fall back to plain links and the alert channel says so once per
+process rather than once per embed.
+
+### `!sheet`
+
+Refetches immediately, bypassing the cache, and reports how many SKUs are
+loaded and which ones still have no affiliate link. Use it after filling links
+in rather than waiting out the five minutes.

@@ -30,6 +30,11 @@ import { runTargetRaffle, summariseTarget } from './target-run.js';
 import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
 import { latestRedditPost } from './db.js';
+import { loadAffiliateLinks, summariseSheet, forgetSheet } from './sheet.js';
+
+// Alerted once per process, not once per drop. A broken sheet URL would
+// otherwise fire on every embed of every run.
+let sheetWarned = false;
 import { drawRedditPosts, queueRedditPosts, DRAW_SUBS, QUEUE_SUBS } from './reddit-copy.js';
 import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setTargetRunCloseTime } from './db.js';
 
@@ -1403,6 +1408,24 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!drawrefresh$/i.test(content)) { await drawRefresh(message); return; }
 
+    if (/^!sheet$/i.test(content)) {
+      forgetSheet();
+      try {
+        const m = await loadAffiliateLinks();
+        const missing = m ? [...m.values()].filter((r) => !r.affiliate) : [];
+        await message.reply(
+          `${summariseSheet(m)}\n`
+          + (missing.length
+            ? `Without a link (${missing.length}): ${missing.slice(0, 15).map((r) => `${r.product || r.sku} ${r.sku}`).join(', ')}`
+              + (missing.length > 15 ? `, and ${missing.length - 15} more` : '')
+            : 'Every SKU has an affiliate link.'),
+        );
+      } catch (err) {
+        await message.reply(`Could not read the sheet: ${err.message}`);
+      }
+      return;
+    }
+
     const xpost = content.match(/^!crosspost\b(.*)$/i);
     if (xpost) { await redditCrosspost(message, xpost[1]); return; }
 
@@ -1471,10 +1494,27 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.channelId !== WALMART_CHANNEL_ID) return;
   if (!message.embeds?.length) return;
 
+  // Loaded once for the whole message rather than per embed. It is cached for
+  // five minutes anyway, but a drop arrives as a burst of embeds and there is
+  // no reason to ask the cache ten times.
+  //
+  // A sheet that cannot be read must not stop a drop being posted: the items
+  // fall back to plain PokeFinder links, which is exactly the behaviour
+  // before the sheet existed, and the alert says so once.
+  let sheet = null;
+  try {
+    sheet = await loadAffiliateLinks();
+  } catch (err) {
+    if (!sheetWarned) {
+      sheetWarned = true;
+      await alert(`The affiliate sheet could not be read, so items will post with plain PokeFinder links: ${err.message}`);
+    }
+  }
+
   for (const embed of message.embeds) {
     let item;
     try {
-      item = parseEmbed(embed, { now: DateTime.now() });
+      item = parseEmbed(embed, { now: DateTime.now(), sheet });
     } catch (err) {
       await alert(`Could not parse an embed from ${message.url}: ${err.message}`);
       continue;
@@ -1486,7 +1526,7 @@ client.on(Events.MessageCreate, async (message) => {
       if (!flag(QUEUE_ENABLED)) continue;
       let q;
       try {
-        q = parseQueueEmbed(embed, { now: DateTime.now() });
+        q = parseQueueEmbed(embed, { now: DateTime.now(), sheet });
       } catch (err) {
         await alert(`Could not parse a queue embed from ${message.url}: ${err.message}`);
         continue;
@@ -1494,7 +1534,7 @@ client.on(Events.MessageCreate, async (message) => {
       if (q === null) {
         // The late queue comes through the restock monitor, flagged in its
         // title. Everything else from that monitor stays ignored.
-        const pq = parsePotentialQueueEmbed(embed, { now: DateTime.now() });
+        const pq = parsePotentialQueueEmbed(embed, { now: DateTime.now(), sheet });
         if (pq === null) continue;
         if (pq.error) {
           await alert(`A potential queue embed could not be read and was ignored: ${pq.error}\n${message.url}`);
@@ -1661,6 +1701,13 @@ client.once(Events.ClientReady, (c) => {
       + `draws to ${DRAW_SUBS.map((x) => `r/${x}`).join(' + ')}, queues to ${QUEUE_SUBS.map((x) => `r/${x}`).join(' + ')}`);
   } else {
     console.log('reddit is OFF, set REDDIT_ENABLED=true to turn it on');
+  }
+  if (process.env.WALMART_SHEET_CSV) {
+    loadAffiliateLinks()
+      .then((m) => console.log(`walmart affiliate ${summariseSheet(m)}`))
+      .catch((err) => console.error(`walmart affiliate sheet unreadable at boot: ${err.message}`));
+  } else {
+    console.log('no WALMART_SHEET_CSV set, so items post with plain PokeFinder links');
   }
   if (publicBaseUrl()) {
     console.log(`target close bookmarklet: ${publicBaseUrl()}/target/bookmarklet?key=${setupKey}`);

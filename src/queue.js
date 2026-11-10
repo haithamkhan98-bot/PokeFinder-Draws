@@ -84,7 +84,7 @@ export function classifyQueue(title) {
  * embed there is no time to parse, so the only things that can be missing are
  * the title, the PID and the price.
  */
-export function parseQueueEmbed(embed, { now = DateTime.now() } = {}) {
+export function parseQueueEmbed(embed, { now = DateTime.now(), sheet = null } = {}) {
   if (embed?.author?.name?.trim() !== QUEUE_AUTHOR) return null;
 
   const f = {};
@@ -118,7 +118,7 @@ export function parseQueueEmbed(embed, { now = DateTime.now() } = {}) {
     seller: f.seller ?? null,
     imageUrl: embed?.thumbnail?.url ?? embed?.image?.url ?? null,
     sourceUrl: embed?.url ?? null,
-    ...resolveLink({ sourceUrl: embed?.url ?? null, pid: String(pid).replace(/[^0-9]/g, '') }),
+    ...resolveLink({ sourceUrl: embed?.url ?? null, pid: String(pid).replace(/[^0-9]/g, ''), sheet }),
     classification: classifyQueue(title),
     dropAt,
     dropDate: dropAt.toISODate(),
@@ -183,7 +183,7 @@ export function parsePredicted(raw) {
  * and either is enough. The price sits in "Predicted Price / Seller" rather
  * than in Price, which reads N/A.
  */
-export function parsePotentialQueueEmbed(embed, { now = DateTime.now() } = {}) {
+export function parsePotentialQueueEmbed(embed, { now = DateTime.now(), sheet = null } = {}) {
   if (embed?.author?.name?.trim() !== POTENTIAL_AUTHOR) return null;
 
   const f = {};
@@ -215,7 +215,7 @@ export function parsePotentialQueueEmbed(embed, { now = DateTime.now() } = {}) {
     priceCents: predicted.cents,
     seller: predicted.seller,
     sourceUrl: embed?.url ?? null,
-    ...resolveLink({ sourceUrl: embed?.url ?? null, pid }),
+    ...resolveLink({ sourceUrl: embed?.url ?? null, pid, sheet }),
     imageUrl: embed?.thumbnail?.url ?? embed?.image?.url ?? null,
     classification: classifyQueue(title),
     potential: true,

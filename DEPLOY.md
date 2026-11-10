@@ -1131,6 +1131,39 @@ in Buffer, and a Discord ping cannot be taken back. With no
 
 ## Reddit
 
+**Manual by default.** Reddit closed self-service API access to new
+developers, so the bot cannot submit these itself: app creation at
+/prefs/apps is gated behind the Responsible Builder Policy and new accounts
+are routed to Devvit, which is a different product for apps that run inside
+Reddit.
+
+So the same queue that would have posted them delivers them to the alert
+channel formatted to paste. The bot still works out the timing, the per sub
+split, the item list and the links. The only manual part is the paste.
+
+`REDDIT_MODE=api` switches to submitting, and needs credentials. Everything
+below the manual section describes that path, which is built and tested but
+has never run against Reddit. If access ever arrives, the same queued rows go
+through it with no other change.
+
+### Manual mode
+
+Each due post arrives as a title in its own code block and a body in another,
+so each can be copied in one gesture without picking up the other. Code blocks
+also stop Discord rendering the markdown, which would turn the links into
+previews and make the raw text impossible to copy back out. A long body splits
+on line boundaries, never mid link.
+
+Six rows are claimed per tick rather than two: a tick is Discord messages, not
+Reddit submissions, and a draw's announcement covers both subs at once.
+Delivering half a set and the rest a minute later would read as two separate
+things to paste.
+
+With no alert channel configured, posts are left queued rather than failed.
+That is a misconfiguration, and burning attempts on it would lose them.
+
+### The API path (not currently usable)
+
 Native posts to both subs, as richtext so one post carries the grid image and
 the affiliate links together.
 
@@ -1154,6 +1187,7 @@ rather than a post.
 | --- | --- |
 | `REDDIT_CLIENT_ID` | From the app at reddit.com/prefs/apps. Must be a **web app**. |
 | `REDDIT_CLIENT_SECRET` | Same app. |
+| `REDDIT_MODE` | `manual` (default) delivers paste ready posts to the alert channel. `api` submits them, and needs credentials Reddit no longer issues. |
 | `REDDIT_ENABLED` | `true` to queue and send. Off by default, and independent of `BUFFER_LIVE`: the tweets going live does not mean the subs should start getting posts. |
 | `REDDIT_TICK_MS` | How often to send what is due. Default 60000. |
 | `REDDIT_DRAW_LINK` / `REDDIT_QUEUE_LINK` | Separate howl links for per-channel tracking. Unset, Reddit reuses the Discord links and the traffic cannot be told apart. |

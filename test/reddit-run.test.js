@@ -70,7 +70,7 @@ test('nothing due is silent', async () => {
 test('posts due before Reddit is connected are left queued, not failed', async () => {
   let failed = 0;
   const did = await tickReddit({
-    claim: async () => [row()],
+    claim: async () => [row()], mode: 'api',
     connected: async () => false,
     markFailed: async () => { failed += 1; },
     pauseMs: 0,
@@ -83,7 +83,7 @@ test('a submit failure is recorded as an attempt and alerted', async () => {
   const alerts = [];
   const marked = [];
   const did = await tickReddit({
-    claim: async () => [row()],
+    claim: async () => [row()], mode: 'api',
     connected: async () => true,
     post: async () => { throw new Error('SUBREDDIT_NOEXIST'); },
     markFailed: async (id, msg) => marked.push([id, msg]),
@@ -98,7 +98,7 @@ test('a submit failure is recorded as an attempt and alerted', async () => {
 test('an unapproved post alerts loudly, since it is the one failure that hides the post', async () => {
   const alerts = [];
   await tickReddit({
-    claim: async () => [row()],
+    claim: async () => [row()], mode: 'api',
     connected: async () => true,
     post: async () => ({ ...ok(), approved: false, approveError: '403', imageError: null }),
     markPosted: async () => {},
@@ -112,7 +112,7 @@ test('an unapproved post alerts loudly, since it is the one failure that hides t
 test('a clean post says nothing, so the alert channel stays readable', async () => {
   const alerts = [];
   await tickReddit({
-    claim: async () => [row()],
+    claim: async () => [row()], mode: 'api',
     connected: async () => true,
     post: async () => ({ ...ok(), approved: true, imageError: null, approveError: null }),
     markPosted: async () => {},
@@ -125,7 +125,7 @@ test('a clean post says nothing, so the alert channel stays readable', async () 
 test('several due posts are spaced out rather than fired at once', async () => {
   const at = [];
   await tickReddit({
-    claim: async () => [row({ id: 1 }), row({ id: 2, sub: 'TCGHub' })],
+    claim: async () => [row({ id: 1 }), row({ id: 2, sub: 'TCGHub' })], mode: 'api',
     connected: async () => true,
     post: async () => { at.push(Date.now()); return { ...ok(), approved: true }; },
     markPosted: async () => {},
@@ -135,4 +135,74 @@ test('several due posts are spaced out rather than fired at once', async () => {
   // Consecutive submissions inside a second is what Reddit's spam heuristics
   // look for.
   assert.ok(at[1] - at[0] >= 25, `gap was ${at[1] - at[0]}ms`);
+});
+
+import { manualMessages, chunk } from '../src/reddit-manual.js';
+
+test('manual mode delivers to the alert channel and does not touch Reddit', async () => {
+  const sent = [];
+  let posted = false;
+  const did = await tickReddit({
+    claim: async () => [row()],
+    post: async () => { posted = true; return ok(); },
+    connected: async () => { throw new Error('should not be asked'); },
+    markPosted: async () => {},
+    alert: async (t) => sent.push(t),
+    pauseMs: 0,
+  });
+  assert.equal(posted, false, 'the API path must not run without credentials');
+  assert.equal(did[0].manual, true);
+  assert.match(sent[0], /Reddit post ready to paste.*r\/PokeCollectors/s);
+});
+
+test('manual mode with no alert channel leaves posts queued rather than losing them', async () => {
+  let failed = 0;
+  const did = await tickReddit({
+    claim: async () => [row()], alert: null,
+    markFailed: async () => { failed += 1; }, pauseMs: 0,
+  });
+  assert.match(did[0].skipped, /no alert channel/);
+  assert.equal(failed, 0);
+});
+
+test('mode api still submits', async () => {
+  let posted = false;
+  await tickReddit({
+    claim: async () => [row()], mode: 'api',
+    connected: async () => true,
+    post: async () => { posted = true; return { ...ok(), approved: true }; },
+    markPosted: async () => {}, pauseMs: 0,
+  });
+  assert.equal(posted, true);
+});
+
+test('the title and body are separately copyable, and not rendered by Discord', () => {
+  const m = manualMessages(row());
+  // Code blocks stop Discord turning the links into previews, which would
+  // make the raw markdown impossible to copy back out.
+  assert.match(m[0], /\*\*Title\*\*\n```\nWalmart Draws Today\n```/);
+  assert.match(m[1], /^```\n/);
+  assert.match(m[0], /Image: https:\/\/host\/grid\.png/);
+});
+
+test('a long body is split on line boundaries, never mid link', () => {
+  const line = '[Some Product Name](https://www.walmart.com/ip/PokeFinder/123456789)';
+  const body = Array.from({ length: 60 }, () => line).join('\n');
+  const parts = chunk(body, 500);
+  assert.ok(parts.length > 1);
+  for (const p of parts) {
+    assert.ok(p.length <= 500);
+    // A split inside a link would leave a fragment with no closing paren.
+    assert.equal((p.match(/\[/g) || []).length, (p.match(/\]\(/g) || []).length);
+  }
+});
+
+test('a single over-long line goes out alone rather than failing the batch', () => {
+  const parts = chunk(`short\n${'x'.repeat(300)}\nshort`, 100);
+  assert.deepEqual(parts[0], 'short');
+  assert.equal(parts[1].length, 300);
+});
+
+test('no image says so rather than leaving a bare label', () => {
+  assert.match(manualMessages(row({ image_url: null }))[0], /No image for this one\./);
 });

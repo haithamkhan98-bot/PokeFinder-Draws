@@ -720,10 +720,12 @@ export async function scheduleRedditPost({
 /**
  * Claim the Reddit posts that are due.
  *
- * A small limit on purpose: Reddit rates submissions per account, and a burst
- * of posts from one tick is exactly what gets an account flagged as a bot.
+ * Six rather than two: in manual mode a tick is Discord messages, not Reddit
+ * submissions, and a draw's announcement covers both subs at once. Delivering
+ * half a set and the rest a minute later would read as two separate things to
+ * paste. The API path spaces its submissions out itself.
  */
-export async function claimDueRedditPosts({ limit = 2 } = {}) {
+export async function claimDueRedditPosts({ limit = 6 } = {}) {
   const { rows } = await pool.query(
     `SELECT id, source, run_id, slot, sub, title, body, image_url, attempts
        FROM reddit_posts

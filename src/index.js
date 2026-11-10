@@ -55,6 +55,10 @@ const {
   TARGET_QUIET_PERIOD_MS = 600_000,
   TARGET_TICK_MS = 300_000,
   REDDIT_ENABLED,
+  // 'manual' drops each post in the alert channel formatted to paste.
+  // 'api' submits it, and needs credentials Reddit no longer issues to new
+  // developers, so manual is the default.
+  REDDIT_MODE = 'manual',
   // Slower than the Discord poll on purpose. Reddit rates submissions per
   // account and nothing here is to the minute: the announcement is queued due
   // immediately and a minute's lateness on a reminder costs nothing.
@@ -1584,10 +1588,11 @@ function startRedditTicker() {
     if (running) return;
     running = true;
     try {
-      const did = await tickReddit({ alert });
+      const did = await tickReddit({ alert, mode: REDDIT_MODE });
       for (const d of did) {
         if (d.skipped) { console.log(`reddit: ${d.due} post(s) due but ${d.skipped}`); continue; }
         if (d.error) { console.log(`reddit ${d.slot} to r/${d.sub} failed: ${d.error}`); continue; }
+        if (d.manual) { console.log(`reddit ${d.slot} for r/${d.sub} delivered to the alert channel to paste`); continue; }
         console.log(`reddit ${d.slot} to r/${d.sub}: ${d.url}${d.approved ? ' (approved)' : ' NOT APPROVED'}`);
       }
     } catch (err) {
@@ -1651,10 +1656,11 @@ client.once(Events.ClientReady, (c) => {
   }
   if (flag(REDDIT_ENABLED)) {
     startRedditTicker();
-    console.log(`reddit posting is ON, checked every ${Number(REDDIT_TICK_MS) / 1000}s, `
+    console.log(`reddit is ON in ${REDDIT_MODE === 'api' ? 'API' : 'MANUAL (paste ready to the alert channel)'} mode, `
+      + `checked every ${Number(REDDIT_TICK_MS) / 1000}s, `
       + `draws to ${DRAW_SUBS.map((x) => `r/${x}`).join(' + ')}, queues to ${QUEUE_SUBS.map((x) => `r/${x}`).join(' + ')}`);
   } else {
-    console.log('reddit posting is OFF, set REDDIT_ENABLED=true to turn it on');
+    console.log('reddit is OFF, set REDDIT_ENABLED=true to turn it on');
   }
   if (publicBaseUrl()) {
     console.log(`target close bookmarklet: ${publicBaseUrl()}/target/bookmarklet?key=${setupKey}`);

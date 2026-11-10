@@ -2,6 +2,7 @@ import {
   scheduleRedditPost, claimDueRedditPosts, markRedditPosted, markRedditFailed,
 } from './db.js';
 import { uploadImage, submit, approve, isConnected } from './reddit.js';
+import { deliverManually } from './reddit-manual.js';
 
 /**
  * Queue a set of Reddit posts from reddit-copy.js.
@@ -78,13 +79,24 @@ export async function tickReddit({
   claim = claimDueRedditPosts, post = postOne,
   markPosted = markRedditPosted, markFailed = markRedditFailed,
   connected = isConnected, alert = null, pauseMs = 2000,
+  // 'manual' drops each post in the alert channel formatted to paste;
+  // 'api' submits it. Manual is the default because Reddit closed
+  // self-service API access, so the API path has no credentials to use.
+  mode = 'manual',
 } = {}) {
   const rows = await claim();
   if (!rows.length) return [];
-  if (!await connected()) {
-    // Left queued rather than failed: once HK finishes the OAuth flow these
-    // are still waiting, and a reminder whose time has passed is dropped by
-    // the due check rather than posted late.
+
+  const manual = mode !== 'api';
+  if (manual && !alert) {
+    // Nowhere to deliver to. Left queued rather than failed, since this is a
+    // misconfiguration and burning attempts on it would lose the posts.
+    return [{ skipped: 'no alert channel to deliver paste ready posts to', due: rows.length }];
+  }
+  if (!manual && !await connected()) {
+    // Left queued rather than failed: once the OAuth flow is done these are
+    // still waiting, and a reminder whose time has passed is dropped by the
+    // due check rather than posted late.
     return [{ skipped: 'Reddit is not connected yet', due: rows.length }];
   }
 
@@ -92,13 +104,15 @@ export async function tickReddit({
   for (const [i, row] of rows.entries()) {
     // Spaced out, because consecutive submissions from one account inside a
     // second is what Reddit's spam heuristics look for.
-    if (i > 0 && pauseMs) await new Promise((r) => setTimeout(r, pauseMs));
+    // Only the API path needs spacing out; Reddit's rate limits are about
+    // submissions, and a manual delivery is a Discord message.
+    if (i > 0 && pauseMs && !manual) await new Promise((r) => setTimeout(r, pauseMs));
     try {
-      const r = await post(row);
+      const r = manual ? await deliverManually(row, { alert }) : await post(row);
       await markPosted(row.id, { fullname: r.fullname, permalink: r.url, approved: r.approved });
       done.push({ ...r, sub: row.sub, slot: row.slot, source: row.source });
 
-      if (alert && (r.imageError || r.approveError)) {
+      if (alert && !r.manual && (r.imageError || r.approveError)) {
         await alert(
           `Reddit ${row.slot} to r/${row.sub} posted: ${r.url}\n`
           + (r.imageError ? `The grid image did not upload: ${r.imageError}\n` : '')

@@ -1,4 +1,4 @@
-import { orderedItems, orderedSets, joinEnglish } from './copy.js';
+import { orderedItems, orderedSets, joinEnglish, timeLabel, shortDate } from './copy.js';
 
 /**
  * Copy for Target raffles.
@@ -19,6 +19,23 @@ const TAGS = '#Pokemon #ad';
 export function raffleHeadline(items) {
   const sets = [...new Set(items.map((i) => i.set).filter(Boolean))];
   return sets.length ? joinEnglish(orderedSets(sets)) : 'Pokemon';
+}
+
+/**
+ * The deadline, in the house format the draw posts already use.
+ *
+ * This is the whole reason the close time is collected by hand at all. A
+ * Target draw runs for days, so unlike a Walmart draw the thing a reader needs
+ * is not when it starts but when it stops, and a post that says "live now"
+ * without a deadline leaves them to work it out on the listing page.
+ *
+ * Both zones and the weekday are stated. A draw that opens on Monday and
+ * closes on Wednesday makes a bare clock time ambiguous.
+ */
+export function closeLine(closesAt) {
+  if (!closesAt) return null;
+  const et = closesAt.setZone('America/New_York');
+  return `⏰ Enter by ${timeLabel(closesAt)} on ${et.toFormat('ccc')} ${shortDate(closesAt)}`;
 }
 
 /** One line per item: name then its own entry link. */
@@ -69,7 +86,7 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'live',
     dueAt: null,
     discord: true,
-    text: body(`💫 Target ${headline} Draws Are Live Now!`, list, BOOKMARK, TAGS),
+    text: body(`💫 Target ${headline} Draws Are Live Now!`, list, closeLine(closesAt), BOOKMARK, TAGS),
   });
 
   if (!closesAt) return posts;
@@ -80,7 +97,7 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
       slot: 'morning',
       dueAt: morning,
       discord: false,
-      text: body(`💫 Reminder: The Target ${headline} Draws Are Still Open!`, list, BOOKMARK, TAGS),
+      text: body(`💫 Reminder: The Target ${headline} Draws Are Still Open!`, list, closeLine(closesAt), BOOKMARK, TAGS),
     });
   }
 
@@ -88,7 +105,7 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
     slot: 'closing',
     dueAt: closesAt.minus({ hours: 1 }),
     discord: true,
-    text: body(`💫 1 Hour Left to Enter the Target ${headline} Draws!`, list, TAGS),
+    text: body(`💫 1 Hour Left to Enter the Target ${headline} Draws!`, list, closeLine(closesAt), TAGS),
   });
 
   return posts;

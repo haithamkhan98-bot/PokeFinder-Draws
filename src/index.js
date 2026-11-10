@@ -1798,11 +1798,15 @@ function startRedditTicker() {
  * configured channel is now fetched at boot and the result said out loud.
  */
 async function checkChannels() {
+  // Only channels the bot reads from or posts to. BESTBUY_CHECKER_CHANNEL_ID
+  // is deliberately absent: it is used solely to render a <#channel> link
+  // inside the digest text, so the bot never needs to view it, and reporting
+  // it as unreadable is the kind of false alarm that trains people to ignore
+  // the alert.
   const wanted = [
     ['walmart', WALMART_CHANNEL_ID],
     ['target', flag(TARGET_ENABLED) ? TARGET_CHANNEL_ID : null],
     ['bestbuy', flag(BESTBUY_ENABLED) ? BESTBUY_CHANNEL_ID : null],
-    ['bestbuy checker', flag(BESTBUY_ENABLED) ? BESTBUY_CHECKER_CHANNEL_ID : null],
     ['alert', ALERT_CHANNEL_ID],
     ['member', DISCORD_MEMBER_CHANNEL_ID],
   ].filter(([, id]) => id);

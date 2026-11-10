@@ -1256,8 +1256,11 @@ deadline stays true for the whole window.
 No tips block. The Walmart tips are about saving a card and re-entering an
 address on walmart.com, none of which applies to a Target raffle.
 
-Every item carries its own link on its own line, because Target has no
-catchall draw page to put in an Enter Here line.
+Every item is a markdown link, because Target has no catchall draw page to
+put in an Enter Here line. Links rather than the bare URLs the tweets and
+Discord posts use: Reddit renders them, so the list reads as product names
+instead of a wall of target.com, and there is no reason for Reddit to match a
+plain style it does not need.
 
 Queued for the same slots the run is building, so a reminder pass does not
 re-queue the announcement, and queued last and caught, so a Reddit problem

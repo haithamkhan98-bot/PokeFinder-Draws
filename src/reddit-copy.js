@@ -17,7 +17,7 @@ import {
   joinEnglish, shortDate, timeLabel,
 } from './copy.js';
 import { stripGroupName, timeLabel as queueTimeLabel, whenPhrase } from './queue-copy.js';
-import { raffleHeadline, raffleItemLines } from './target-copy.js';
+import { raffleHeadline } from './target-copy.js';
 import { groupQueue } from './queue.js';
 
 /** Draws go to both subs. Queues go to TCGHub alone, mirroring CollectFinder. */
@@ -171,8 +171,10 @@ export function queueRedditPosts({ items, dropAt, headline, now, imageUrl = null
  * No tips block. The Walmart tips are about saving a card and re-entering an
  * address on walmart.com, and none of that applies to a Target raffle.
  *
- * Every item carries its own link on its own line, because Target has no
- * catchall draw page to put in an Enter Here line.
+ * Every item carries its own markdown link, because Target has no catchall
+ * draw page to put in an Enter Here line. Links rather than bare URLs: Reddit
+ * renders them, and matching the plain style the tweets and Discord posts use
+ * buys nothing on a platform that does not need it.
  */
 export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
   if (!closesAt) return [];
@@ -180,7 +182,12 @@ export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
   const noun = items.length > 1 ? 'Draws' : 'Draw';
   const et = closesAt.setZone('America/New_York');
   const deadline = `${et.toFormat('LLLL d')} at ${timeLabel(closesAt)}`;
-  const list = `Item List:\n\n${raffleItemLines(items).split('\n').map((l) => `* ${l}`).join('\n')}`;
+  // Markdown links rather than a bare URL per line. Reddit renders them, so
+  // the list reads as product names instead of a wall of target.com, and the
+  // other channels' plain style does not have to carry over here.
+  const list = `Item List:\n\n${items
+    .map((i) => `* [${i.postName ?? i.productName ?? i.rawTitle}](${i.link})`)
+    .join('\n')}`;
 
   return [
     {

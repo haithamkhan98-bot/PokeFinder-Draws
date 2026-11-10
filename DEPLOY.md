@@ -1190,7 +1190,7 @@ rather than a post.
 | `REDDIT_MODE` | `manual` (default) delivers paste ready posts to the alert channel. `api` submits them, and needs credentials Reddit no longer issues. |
 | `REDDIT_ENABLED` | `true` to queue and send. Off by default, and independent of `BUFFER_LIVE`: the tweets going live does not mean the subs should start getting posts. |
 | `REDDIT_TICK_MS` | How often to send what is due. Default 60000. |
-| `REDDIT_DRAW_LINK` / `REDDIT_QUEUE_LINK` | Separate howl links for per-channel tracking. Unset, Reddit reuses the Discord links and the traffic cannot be told apart. |
+| `REDDIT_DRAW_LINK` / `REDDIT_QUEUE_LINK` | Reddit's own Mavely links, so its earnings separate from Discord's and Twitter's. Defaults are set in code; the variables only override them. Target raffles have no equivalent, since Target gives every item its own listing and there is no catchall page. |
 | `REDDIT_SUB_POKECOLLECTORS` / `REDDIT_SUB_TCGHUB` | Sub name overrides, for testing against a private sub. |
 | `REDDIT_USER_AGENT` | Reddit throttles or blocks generic agents, so this is not optional furniture. |
 
@@ -1336,3 +1336,24 @@ bottom, which are the ones not got to yet.
 Refetches immediately past the cache and reports the same list on demand. It
 also resets the dedup, so the next startup reports again rather than staying
 silent because this reply already said it.
+### Target raffles on Reddit
+
+Two posts, not the three the tweets get: the live announcement and the hour
+before close. A Reddit post stays findable in the subreddit, so the
+announcement is still doing its job on day two, and a third submission about
+one draw to one sub reads as spam. Losing the subreddit costs more than a
+missed reminder.
+
+The live title states the deadline rather than saying it is live. Reddit
+titles cannot be edited, and "live now" stops being news tomorrow while the
+deadline stays true for the whole window.
+
+No tips block. The Walmart tips are about saving a card and re-entering an
+address on walmart.com, none of which applies to a Target raffle.
+
+Every item carries its own link on its own line, because Target has no
+catchall draw page to put in an Enter Here line.
+
+Queued for the same slots the run is building, so a reminder pass does not
+re-queue the announcement, and queued last and caught, so a Reddit problem
+cannot cost the tweets or the Discord posts.

@@ -13,10 +13,11 @@
  *     unchanged; only the bullet character becomes a markdown list marker.
  */
 import {
-  TIPS, DRAW_LINK_DISCORD, itemLines, otherHeading, orderedSets, otherLabels,
+  TIPS, itemLines, otherHeading, orderedSets, otherLabels,
   joinEnglish, shortDate, timeLabel,
 } from './copy.js';
-import { QUEUE_LINK, stripGroupName, timeLabel as queueTimeLabel, whenPhrase } from './queue-copy.js';
+import { stripGroupName, timeLabel as queueTimeLabel, whenPhrase } from './queue-copy.js';
+import { raffleHeadline, raffleItemLines } from './target-copy.js';
 import { groupQueue } from './queue.js';
 
 /** Draws go to both subs. Queues go to TCGHub alone, mirroring CollectFinder. */
@@ -28,12 +29,17 @@ export const DRAW_SUBS = [SUBS.pokecollectors, SUBS.tcghub];
 export const QUEUE_SUBS = [SUBS.tcghub];
 
 /**
- * Reddit gets its own affiliate links so its earnings can be told apart from
- * Discord's and Twitter's. Until those are set, fall back to the existing
- * links rather than post a dead one.
+ * Reddit's own affiliate links, so its earnings can be told apart from
+ * Discord's and Twitter's. These are Mavely rather than the howl links the
+ * other channels use, which is what makes the split readable.
+ *
+ * Target raffles have no equivalent: Target gives every raffle item its own
+ * listing with no catchall page, so those posts carry a link per item.
  */
-export const REDDIT_DRAW_LINK = process.env.REDDIT_DRAW_LINK || DRAW_LINK_DISCORD;
-export const REDDIT_QUEUE_LINK = process.env.REDDIT_QUEUE_LINK || QUEUE_LINK;
+export const REDDIT_DRAW_LINK = process.env.REDDIT_DRAW_LINK
+  || 'https://mavely.app.link/UQX3vHGiX7b';
+export const REDDIT_QUEUE_LINK = process.env.REDDIT_QUEUE_LINK
+  || 'https://mavely.app.link/KTXWeMHiX7b';
 
 export const TITLE_MAX = 300;
 
@@ -149,6 +155,52 @@ export function queueRedditPosts({ items, dropAt, headline, now, imageUrl = null
       imageUrl,
       title: trimTitle(`Reminder: Walmart Queue Drops Today at ${etClock(dropAt)} EST | ${headline}`),
       body: body(enter, list, tipsBlock()),
+    },
+  ];
+}
+
+/**
+ * The two posts for one Target raffle.
+ *
+ * Two, not the three the tweets get. A Reddit post stays in the subreddit
+ * where people can find it, so the announcement is still doing its job on day
+ * two; the morning reminder the tweets carry would be a third submission on
+ * the same draw to the same sub, which reads as spam and is the quickest way
+ * to lose the subreddit.
+ *
+ * No tips block. The Walmart tips are about saving a card and re-entering an
+ * address on walmart.com, and none of that applies to a Target raffle.
+ *
+ * Every item carries its own link on its own line, because Target has no
+ * catchall draw page to put in an Enter Here line.
+ */
+export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
+  if (!closesAt) return [];
+  const headline = raffleHeadline(items);
+  const noun = items.length > 1 ? 'Draws' : 'Draw';
+  const et = closesAt.setZone('America/New_York');
+  const deadline = `${et.toFormat('LLLL d')} at ${timeLabel(closesAt)}`;
+  const list = `Item List:\n\n${raffleItemLines(items).split('\n').map((l) => `* ${l}`).join('\n')}`;
+
+  return [
+    {
+      slot: 'live',
+      dueAt: null,
+      subs: DRAW_SUBS,
+      imageUrl,
+      // The title states the deadline rather than that it is live, because a
+      // title cannot be edited and "live now" stops being news tomorrow while
+      // the deadline stays true for the whole window.
+      title: trimTitle(`Target ${headline} ${noun} Are Live, Entries Accepted by ${deadline}`),
+      body: body(`Entries accepted until ${deadline}.`, list),
+    },
+    {
+      slot: 'closing',
+      dueAt: closesAt.minus({ hours: 1 }),
+      subs: DRAW_SUBS,
+      imageUrl,
+      title: trimTitle(`Reminder: Target ${headline} ${noun} Close Today at ${timeLabel(closesAt)}`),
+      body: body(`Entries close at ${timeLabel(closesAt)}, one hour from now.`, list),
     },
   ];
 }

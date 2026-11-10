@@ -78,3 +78,68 @@ test('an empty body gives an empty document rather than throwing', () => {
   assert.deepEqual(toRichtext('').document, []);
   assert.deepEqual(toRichtext(null).document, []);
 });
+
+import { targetRedditPosts, REDDIT_DRAW_LINK, REDDIT_QUEUE_LINK } from '../src/reddit-copy.js';
+import { DateTime } from 'luxon';
+
+const NOW = DateTime.fromISO('2026-11-09T14:12', { zone: 'America/New_York' });
+const CLOSES = DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' });
+const ITEMS = [
+  { postName: 'Delta Reign Booster Display Box', set: 'Delta Reign', link: 'https://www.target.com/p/PokeFinder/A-1013166576' },
+  { postName: 'Delta Reign Elite Trainer Box', set: 'Delta Reign', link: 'https://www.target.com/p/PokeFinder/A-1012793604' },
+];
+
+test('Reddit gets its own affiliate links, not the Discord or tweet ones', () => {
+  assert.match(REDDIT_DRAW_LINK, /mavely\.app\.link/);
+  assert.match(REDDIT_QUEUE_LINK, /mavely\.app\.link/);
+  assert.notEqual(REDDIT_DRAW_LINK, REDDIT_QUEUE_LINK, 'draws and queues must be separable');
+});
+
+test('a Target raffle gets two Reddit posts, not the three the tweets get', () => {
+  const posts = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  // A third submission on the same draw to the same sub reads as spam, and a
+  // Reddit post stays findable in the sub so the announcement still works on
+  // day two.
+  assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
+});
+
+test('the live title states the deadline rather than that it is live', () => {
+  const [live] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  // Titles cannot be edited, and "live now" stops being news tomorrow while
+  // the deadline stays true for the whole window.
+  assert.match(live.title, /Entries Accepted by November 11 at 11AM EST \/ 8AM PST/);
+  assert.doesNotMatch(live.title, /Now!/);
+  assert.equal(live.dueAt, null, 'the announcement is due immediately');
+});
+
+test('the closing post is due an hour before close and goes to both subs', () => {
+  const [, closing] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  assert.equal(closing.dueAt.toMillis(), CLOSES.minus({ hours: 1 }).toMillis());
+  assert.deepEqual(closing.subs, ['PokeCollectors', 'TCGHub']);
+});
+
+test('every item carries its own link, since Target has no catchall page', () => {
+  const [live] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  assert.match(live.body, /\* Delta Reign Booster Display Box https:\/\/www\.target\.com\/p\/PokeFinder\/A-1013166576/);
+  assert.doesNotMatch(live.body, /Enter Here at/, 'there is no single draw page to point at');
+});
+
+test('no Walmart tips block, since none of it applies to Target', () => {
+  const [live] = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  assert.doesNotMatch(live.body, /Tips for Success/);
+  assert.doesNotMatch(live.body, /walmart/i);
+});
+
+test('with no close time there are no Target Reddit posts', () => {
+  // The whole post is built around the deadline.
+  assert.deepEqual(targetRedditPosts({ items: ITEMS, now: NOW, closesAt: null }), []);
+});
+
+test('a Target title over 300 characters is trimmed on a word boundary', () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({
+    postName: `Some Very Long Product Name Number ${i}`, set: `Set ${i}`, link: 'https://x/y',
+  }));
+  const [live] = targetRedditPosts({ items: many, now: NOW, closesAt: CLOSES });
+  assert.ok(live.title.length <= 300, `title was ${live.title.length}`);
+  assert.doesNotMatch(live.title, /\s$/);
+});

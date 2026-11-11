@@ -66,7 +66,12 @@ export class Batcher {
     }
 
     const known = run.items.get(item.pid);
-    run.items.set(item.pid, item);
+    // The arrival time is kept because the real drop arrives as one burst and
+    // the clear-out pings follow a minute or two later. The quiet period
+    // swallows both into one run, so without this the only signal separating
+    // them is thrown away. A repeat keeps its FIRST seen time: the monitor
+    // reposting an item does not make it newer.
+    run.items.set(item.pid, { ...item, seenAt: known?.seenAt ?? this.clock() });
 
     // A repeat of an item we already hold is the monitor reposting or the bot
     // restarting. It joins the run but must not extend the quiet period,

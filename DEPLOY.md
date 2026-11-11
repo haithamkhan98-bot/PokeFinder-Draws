@@ -1493,3 +1493,33 @@ exactly the wrong items. So it convicts rather than selects.
 An unreachable page or a bot wall returns null, not an empty set. "Nothing is
 queued" would convict every item at once; "no signal" convicts nothing.
 
+### `!targetpost`
+
+Prints the two member Discord posts for the raffles currently in the channel,
+in code blocks, ready to paste.
+
+Built by reading the channel rather than from a stored run, so it works
+whether or not a run has fired and whatever `TARGET_LIVE` is set to. That
+matters because the member posts are only queued when `TARGET_LIVE` is on:
+until it is, this is the only way to get the text.
+
+Both beats are printed, the live one and the hour-before-close one, because
+seeing the second in advance is the point of being able to ask at any time.
+
+Needs a close time, since the posts are built around the countdown. Without one
+it says so rather than printing a post with a hole in it.
+
+### Why `!targetscan` fires immediately
+
+The batcher holds its items in memory. Every deploy wipes them, and the Target
+quiet period is ten minutes. During an afternoon of deploys no scanned run
+ever survived long enough to fire: the first live Target raffles were scanned
+in three times and produced nothing, with no log line to say why.
+
+A scan is a deliberate act on listings already sitting in the channel, so
+there is nothing further to wait for. It fires at once.
+
+This is a workaround for in-memory batching, not a fix for it. A live raffle
+detected normally still has to survive its ten minute window, and a deploy in
+that window still loses it silently.
+

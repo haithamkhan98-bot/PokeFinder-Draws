@@ -32,6 +32,7 @@ import { recordBestbuyItem, pendingBestbuyRun, retryBestbuyRun, reopenBestbuyRun
 import { startBestbuyScheduler } from './bestbuy-schedule.js';
 import { probeListing, formatProbe } from './target.js';
 import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-raffle.js';
+import { targetDiscordPosts } from './target-copy.js';
 import { runTargetRaffle, summariseTarget } from './target-run.js';
 import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
@@ -1295,6 +1296,13 @@ async function targetScan(message, raw) {
       }
     }
 
+    // Fired at once rather than waiting out the quiet period. A scan is a
+    // deliberate act on listings already in the channel, so there is nothing
+    // more to wait for, and the batcher holds its items in memory: every
+    // deploy wipes them. With a ten minute window and an afternoon of
+    // deploys, no scanned run ever survived long enough to fire.
+    if (added.length) targetBatcher.flush();
+
     const uniqueSkips = [...new Set(skipped)];
     await message.reply(
       `Scanned the last ${ordered.length} message(s) in the Target channel.\n`
@@ -1304,9 +1312,7 @@ async function targetScan(message, raw) {
         ? `\n**Not raffles** (${skipped.length} embed(s), ${uniqueSkips.length} shape(s))\n`
           + uniqueSkips.slice(0, 5).join('\n')
         : '')
-      + (added.length
-        ? `\n\nThe run fires after ${Number(TARGET_QUIET_PERIOD_MS) / 60000} minutes of quiet.`
-        : ''),
+      + (added.length ? '\n\nFiring the run now.' : ''),
     );
   } catch (err) {
     await message.reply(`Could not scan the Target channel: ${err.message}`);
@@ -1460,6 +1466,82 @@ async function drawRepair(message, raw) {
     );
   } catch (err) {
     await message.reply(`Could not repair the draw: ${err.message}`);
+  }
+}
+
+/**
+ * `!targetpost` prints the member Discord posts for the open Target raffles.
+ *
+ * Built by reading the channel, not from a stored run, so it works whether or
+ * not a run has fired and whatever TARGET_LIVE is set to. That matters because
+ * the member posts are only queued when TARGET_LIVE is on, so until it is
+ * there is no other way to get this text.
+ *
+ * Both beats are printed. The live one is what to post now; the closing one is
+ * what to post an hour before, and seeing it in advance is the point of being
+ * able to ask for it at any time.
+ */
+async function targetPost(message) {
+  if (!TARGET_CHANNEL_ID) {
+    await message.reply('TARGET_CHANNEL_ID is not set, so there is no channel to read.');
+    return;
+  }
+  try {
+    const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply('The Target channel is not readable.');
+      return;
+    }
+
+    const fetched = await channel.messages.fetch({ limit: 60 });
+    const found = new Map();
+    for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
+      for (const embed of m.embeds ?? []) {
+        if (!isRaffleEmbed(embed)) continue;
+        const t = parseTargetRaffle(embed, { now: DateTime.now() });
+        if (t) found.set(t.tcin, t);
+      }
+    }
+
+    const usable = usableRaffleItems([...found.values()]);
+    if (!usable.length) {
+      await message.reply('No raffle listings in the last 60 messages of the Target channel.');
+      return;
+    }
+
+    const naming = await nameItems(usable);
+    const named = orderedItems(naming.items.map((i, idx) => ({ ...usable[idx], ...i })));
+    const closes = await targetCloseTimeFor(named.map((i) => i.tcin));
+    if (!closes) {
+      await message.reply(
+        `Found ${named.length} raffle listing(s) but no close time for any of them, and the `
+        + 'member posts are built around the countdown. Click the bookmarklet on one listing first.',
+      );
+      return;
+    }
+
+    const closesAt = DateTime.fromJSDate(new Date(closes.closes_at));
+    const posts = targetDiscordPosts({
+      items: named,
+      now: DateTime.now(),
+      closesAt,
+      role: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
+    });
+
+    await message.reply(
+      `${named.length} listing(s), closing `
+      + `${closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET `
+      + `(from TCIN ${closes.tcin}).`,
+    );
+    for (const p of posts) {
+      await message.reply(
+        `**${p.slot === 'live' ? 'Post now' : 'Post an hour before close, '
+          + closesAt.minus({ hours: 1 }).setZone('America/New_York').toFormat('ccc h:mma')}**\n`
+        + `\`\`\`\n${p.text}\n\`\`\``,
+      );
+    }
+  } catch (err) {
+    await message.reply(`Could not build the Target posts: ${err.message}`);
   }
 }
 
@@ -1696,6 +1778,8 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!bbruns$/i.test(content)) { await bestbuyRuns(message); return; }
     if (/^!bbstatus$/i.test(content)) { await bestbuyStatus(message); return; }
+
+    if (/^!targetpost$/i.test(content)) { await targetPost(message); return; }
 
     const tscan = content.match(/^!targetscan(?:\s+(\d+))?$/i);
     if (tscan) { await targetScan(message, tscan[1]); return; }

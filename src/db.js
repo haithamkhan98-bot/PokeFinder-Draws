@@ -485,7 +485,11 @@ export async function recentBestbuyRuns(limit = 5) {
 /** The most recent fired draw run and the items it held. For `!drawrefresh`. */
 export async function latestDrawRun() {
   const { rows } = await pool.query(
-    `SELECT id, draw_date, starts_at, ends_at, image_url
+    // draw_date is cast to text on the way out. A DATE column arrives as a JS
+    // Date, and every item carries its draw date as the string "2026-11-12",
+    // so comparing the two silently matched nothing: !drawrepair reported
+    // finding no items for a draw whose embeds were sitting right there.
+    `SELECT id, to_char(draw_date, 'YYYY-MM-DD') AS draw_date, starts_at, ends_at, image_url
        FROM draw_runs WHERE fired_at IS NOT NULL
       ORDER BY fired_at DESC LIMIT 1`,
   );

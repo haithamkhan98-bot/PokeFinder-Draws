@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Events, PermissionsBitField } from 'discord.js';
 import { DateTime } from 'luxon';
 import { parseEmbed, DRAW_AUTHOR, isPostable } from './parse.js';
 import { Batcher } from './batcher.js';
@@ -1803,6 +1803,9 @@ async function checkChannels() {
   // inside the digest text, so the bot never needs to view it, and reporting
   // it as unreadable is the kind of false alarm that trains people to ignore
   // the alert.
+  // The channels the bot writes to, as opposed to only reads.
+  const POST_CHANNELS = new Set(['alert', 'member']);
+
   const wanted = [
     ['walmart', WALMART_CHANNEL_ID],
     ['target', flag(TARGET_ENABLED) ? TARGET_CHANNEL_ID : null],
@@ -1819,9 +1822,28 @@ async function checkChannels() {
       // Viewable is the one that matters: a channel can be fetched by id and
       // still deliver no messages if the bot cannot view it.
       const canView = ch.viewable ?? true;
+
+      // Viewable is not enough for the channels the bot posts into. The draw
+      // announcement failed five times with "Missing Permissions" on a channel
+      // this check had already reported as fine, because reading and writing
+      // are separate permissions and only reading was being tested.
+      const me = ch.guild?.members?.me ?? null;
+      const perms = me && ch.permissionsFor ? ch.permissionsFor(me) : null;
+      const posts = POST_CHANNELS.has(label);
+      const canSend = !posts || !perms ? true : perms.has(PermissionsBitField.Flags.SendMessages);
+      const canAttach = !posts || !perms ? true : perms.has(PermissionsBitField.Flags.AttachFiles);
+
+      const faults = [
+        !canView && 'cannot view',
+        !canSend && 'cannot send messages',
+        // The draw and raffle posts all carry a grid, so losing attachments
+        // costs the picture rather than the post.
+        canSend && !canAttach && 'cannot attach files, so posts will go out without the grid image',
+      ].filter(Boolean);
+
       console.log(`channel ${label}: #${ch.name ?? id} in ${ch.guild?.name ?? 'no guild'}`
-        + `${canView ? '' : '  NOT VIEWABLE'}`);
-      if (!canView) bad.push(`${label} (#${ch.name}) is not viewable by the bot`);
+        + `${faults.length ? `  ${faults.join(', ').toUpperCase()}` : ''}`);
+      for (const f of faults) bad.push(`${label} (#${ch.name}) ${f}`);
     } catch (err) {
       console.error(`channel ${label} (${id}) could not be fetched: ${err.message}`);
       bad.push(`${label} (${id}) could not be fetched: ${err.message}`);

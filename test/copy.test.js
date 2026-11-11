@@ -111,8 +111,14 @@ test('30th Anniversary leads the set list however the items arrive', () => {
 });
 
 test('several sets make the noun plural', () => {
+  // Two sets means at least two products: Walmart runs one draw per product,
+  // so the fixture carries one item per set rather than one item for both.
   const multi = buildPosts({
-    items, sets: ['30th Anniversary', 'Prismatic Evolutions'], startsAt, endsAt,
+    items: [
+      { postName: 'Prismatic Evolutions Booster Bundle 2-Pack', priceDisplay: '$79.94' },
+      { postName: '30th Anniversary Elite Trainer Box', priceDisplay: '$59.99' },
+    ],
+    sets: ['30th Anniversary', 'Prismatic Evolutions'], startsAt, endsAt,
   });
   assert.match(multi[0].text, /^💫 New 30th Anniversary and Prismatic Evolutions Walmart Draws Beginning/);
 });
@@ -191,7 +197,18 @@ test('Pokemon sets lead the headline and the other categories follow', () => {
       [poke('30th Anniversary ETB', '$59.99'), poke('Prismatic Evolutions Bundle', '$79.94'), op('One Piece OP-11 Booster Box', '$95.88'), sport('Topps Chrome Hobby Box', '$299.99')],
       ['Prismatic Evolutions', '30th Anniversary'],
     ),
-    '💫 New 30th Anniversary, Prismatic Evolutions, One Piece TCG and Sports Cards Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
+    // Sports cards are in the item list but not the headline: naming them
+    // spends the most valuable words in the post on what the audience came
+    // for least.
+    '💫 New 30th Anniversary, Prismatic Evolutions and One Piece TCG Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
+  );
+});
+
+test('sports cards never reach the headline, even alone with Pokemon', () => {
+  assert.equal(
+    headline([poke('30th Celebration Poster Collection', '$29.99'), sport('Topps Bowman Football Value Box', '$39.99')], ['30th Celebration']),
+    // Two products, so "Draws", even though only one thing is named.
+    '💫 New 30th Celebration Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
   );
 });
 

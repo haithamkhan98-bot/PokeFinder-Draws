@@ -122,3 +122,26 @@ test('a draw embed with no Time and no live marker is still reported', () => {
   const res = parseEmbed(broken, { now: DateTime.now() });
   assert.match(res.error, /missing Time/);
 });
+
+test('a Figure Collection is a card product, not a figure', () => {
+  // "30th Celebration Figure Collection, Mew and Mewtwo" matched the figure
+  // pattern meant for Funko and Nendoroid and was dropped from a live draw:
+  // missing from the tweets, the Discord posts and the grid.
+  assert.equal(classify('Pokémon TCG: 30TH Celebration Figure Collection—Mew and Mewtwo'), 'pokemon');
+  assert.equal(classify('Pokemon Trading Card Game: 30th Celebration Figure Collection - Mewtwo'), 'pokemon');
+});
+
+test('actual merchandise is still excluded', () => {
+  // The allowlist is product line names, not words that co-occur with cards,
+  // so a plush or a Funko of a card character still goes.
+  assert.equal(classify('Pokémon Pikachu Plush, 8 inch'), 'excluded');
+  assert.equal(classify('Funko Pop! Games: Pokemon - Charizard'), 'excluded');
+  assert.equal(classify('Pokemon Charizard Statue Figure'), 'excluded');
+  assert.equal(classify('NeeDoh Dream Drop'), 'unknown');
+});
+
+test('repacks are still excluded even when they name a card product', () => {
+  // The repack check runs first, so "Mystery Power Box" cannot be rescued by
+  // containing a product line word.
+  assert.equal(classify('Pokemon Mystery Power Box with Booster Packs'), 'excluded');
+});

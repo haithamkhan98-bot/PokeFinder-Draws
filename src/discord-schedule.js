@@ -29,17 +29,46 @@ export function startDiscordScheduler(client, { intervalMs = 10_000, onError } =
           const channel = await client.channels.fetch(post.channel_id);
           if (!channel?.isTextBased?.()) throw new Error('channel is not a text channel the bot can post in');
 
-          const sent = await channel.send({
+          const body = {
             content: post.body.slice(0, 1990),
-            // The draw graphic, the same one the tweets carry. Discord fetches
-            // it from the Railway image host, which does not expire the way a
-            // Canva export link does.
-            ...(post.image_url ? { files: [post.image_url] } : {}),
             // Without this the role mention renders but does not ping.
             allowedMentions: { parse: ['roles'] },
-          });
+          };
+
+          let sent;
+          let lostImage = null;
+          try {
+            sent = await channel.send({
+              ...body,
+              // The draw graphic, the same one the tweets carry. Discord
+              // fetches it from the Railway image host, which does not expire
+              // the way a Canva export link does.
+              ...(post.image_url ? { files: [post.image_url] } : {}),
+            });
+          } catch (err) {
+            // A send with an attachment needs Attach Files on top of Send
+            // Messages, and Discord reports the lack of it as the same
+            // "Missing Permissions" as not being able to post at all. A draw
+            // announcement was lost to this while text-only reminders in the
+            // same channel had always worked.
+            //
+            // A post without its picture beats no post, so the attachment is
+            // dropped and the text goes out. The alert says what was lost.
+            if (!post.image_url) throw err;
+            lostImage = err.message;
+            sent = await channel.send(body);
+          }
+
           await markDiscordPosted(post.id, sent.id, post.source);
-          console.log(`posted discord ${post.source} ${post.slot} for run ${post.run_id}`);
+          console.log(`posted discord ${post.source} ${post.slot} for run ${post.run_id}`
+            + (lostImage ? ' WITHOUT its image' : ''));
+          if (lostImage) {
+            onError?.(
+              `Discord post "${post.slot}" for ${post.source} run ${post.run_id} went out `
+              + `WITHOUT the grid image: ${lostImage}\n`
+              + 'This is usually the Attach Files permission missing in that channel.',
+            );
+          }
         } catch (err) {
           await markDiscordFailed(post.id, err.message, post.source);
           // Five attempts, then it stops retrying and stays visible in the table.

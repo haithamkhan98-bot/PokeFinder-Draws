@@ -552,35 +552,39 @@ const queueBatcher = new Batcher({
       const holiday = holidayOn(dropDate);
 
       // Walmart's monitor pings an item when it LEAVES the queue as well as
-      // when it joins, and the two embeds are identical. So a drop arrives
-      // mixed with the previous week's items being cleared out: one real run
-      // of four came through as fifteen.
+      // when it joins, and the two embeds are identical in every field. So a
+      // drop arrives mixed with the previous week's items being cleared out:
+      // one real run of four came through as fifteen.
       //
-      // Nothing in the embed separates them, but the bot has already seen last
-      // week's items. Anything it has posted before in the window is held back
-      // and named in the alert rather than dropped quietly, because a product
-      // Walmart genuinely queues twice would otherwise vanish without trace.
-      let repeats = [];
+      // Three independent signals separate them, and none is trusted alone.
+      // The first arrival burst is always kept, because Walmart does re-queue
+      // products and such an item arrived WITH the real drop. A later burst is
+      // dropped only on evidence: seen in a recent queue, or sitting on the
+      // live queue page right now, which means it is in the queue that is
+      // running rather than the one coming.
+      let selection = null;
       let fresh = usable;
       try {
-        const seen = await previousQueuePids({
-          beforeDropDate: dropDate, days: Number(QUEUE_REPEAT_DAYS),
-        });
-        repeats = usable
-          .filter((i) => seen.has(String(i.pid)))
-          .map((i) => ({ ...i, lastSeen: seen.get(String(i.pid)) }));
-        const held = new Set(repeats.map((i) => String(i.pid)));
-        fresh = usable.filter((i) => !held.has(String(i.pid)));
+        const [previousPids, livePageIds] = await Promise.all([
+          previousQueuePids({ beforeDropDate: dropDate, days: Number(QUEUE_REPEAT_DAYS) }),
+          queuePageIds(),
+        ]);
+        selection = selectDropItems(usable, { previousPids, livePageIds });
+        fresh = selection.kept;
+        if (!livePageIds) {
+          console.log('queue page could not be read, so only history and arrival order were used');
+        }
       } catch (err) {
-        await alert(`Could not check the queue history, so every item is treated as new: ${err.message}`);
+        // Every item is kept. Posting a drop with extra items beats posting
+        // nothing, and the alert says the filter did not run.
+        await alert(`Could not work out which queue items are real, so all ${usable.length} are included: ${err.message}`);
       }
 
       if (!fresh.length) {
         await alert(
-          `**Queue drop ${dropDate}: nothing new.** All ${usable.length} item(s) have appeared in `
-          + "an earlier queue, so this looks like last week's items being cleared out rather than "
-          + 'a new drop. Nothing was posted.\n'
-          + repeats.map((i) => `  ${i.productName} (${i.pid}) last seen ${i.lastSeen}`).join('\n'),
+          `**Queue drop ${dropDate}: nothing new.** All ${usable.length} item(s) look like a `
+          + "clear-out of an earlier queue rather than a new drop, so nothing was posted.\n"
+          + (selection ? explainSelection(selection) : ''),
         );
         return;
       }
@@ -650,10 +654,11 @@ const queueBatcher = new Batcher({
           : '')
         + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
         + `Headline (${report.headline.source}): ${report.headline.headline}\n`
-        + (repeats.length
-          ? `\n**${repeats.length} item(s) held back as last week's**, pinged because they left the `
-            + 'queue rather than joined it. If any belong in this drop, say so and they go back in.\n'
-            + repeats.map((i) => `  ${i.productName} (${i.pid}) last seen ${i.lastSeen}`).join('\n')
+        + (selection && selection.dropped.length
+          ? `\n**${selection.dropped.length} of ${usable.length} item(s) dropped** as last week's `
+            + `being cleared out, across ${selection.clusters} arrival burst(s). `
+            + 'If any belong in this drop, say so and they go back in.\n'
+            + explainSelection(selection)
           : '')
         + `\nItems: ${fresh.length}`
         + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')

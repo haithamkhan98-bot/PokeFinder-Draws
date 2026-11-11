@@ -86,6 +86,8 @@ const {
   DISCORD_MEMBER_ROLE_ID,
   QUEUE_ENABLED,
   QUEUE_LIVE,
+  // How far back a repeated queue item still counts as last week's.
+  QUEUE_REPEAT_DAYS = 35,
   BESTBUY_CHANNEL_ID,
   BESTBUY_ALERT_CHANNEL_ID,
   BESTBUY_CHECKER_CHANNEL_ID,
@@ -547,20 +549,55 @@ const queueBatcher = new Batcher({
       }
 
       const dropAt = usable[0].dropAt;
-      const res = await saveQueueRun({ dropDate, dropsAt: dropAt.toISO(), items: usable });
+
+      // Walmart's monitor pings an item when it LEAVES the queue as well as
+      // when it joins, and the two embeds are identical. So a drop arrives
+      // mixed with the previous week's items being cleared out: one real run
+      // of four came through as fifteen.
+      //
+      // Nothing in the embed separates them, but the bot has already seen last
+      // week's items. Anything it has posted before in the window is held back
+      // and named in the alert rather than dropped quietly, because a product
+      // Walmart genuinely queues twice would otherwise vanish without trace.
+      let repeats = [];
+      let fresh = usable;
+      try {
+        const seen = await previousQueuePids({
+          beforeDropDate: dropDate, days: Number(QUEUE_REPEAT_DAYS),
+        });
+        repeats = usable
+          .filter((i) => seen.has(String(i.pid)))
+          .map((i) => ({ ...i, lastSeen: seen.get(String(i.pid)) }));
+        const held = new Set(repeats.map((i) => String(i.pid)));
+        fresh = usable.filter((i) => !held.has(String(i.pid)));
+      } catch (err) {
+        await alert(`Could not check the queue history, so every item is treated as new: ${err.message}`);
+      }
+
+      if (!fresh.length) {
+        await alert(
+          `**Queue drop ${dropDate}: nothing new.** All ${usable.length} item(s) have appeared in `
+          + "an earlier queue, so this looks like last week's items being cleared out rather than "
+          + 'a new drop. Nothing was posted.\n'
+          + repeats.map((i) => `  ${i.productName} (${i.pid}) last seen ${i.lastSeen}`).join('\n'),
+        );
+        return;
+      }
+
+      const res = await saveQueueRun({ dropDate, dropsAt: dropAt.toISO(), items: fresh });
       if (res.amend) {
         await alert(`Queue drop ${dropDate} already ran (status ${res.status}) and more items arrived. Needs handling by hand.`);
         return;
       }
 
       if (!process.env.BUFFER_TOKEN) {
-        await alert(`Queue drop ${dropDate}: ${usable.length} item(s) saved, but BUFFER_TOKEN is not set so nothing was posted.`);
+        await alert(`Queue drop ${dropDate}: ${fresh.length} item(s) saved, but BUFFER_TOKEN is not set so nothing was posted.`);
         return;
       }
 
       const report = await runQueue({
         runId: res.runId,
-        items: usable,
+        items: fresh,
         dropAt,
         now: DateTime.now(),
         // Queue posts have their own flag. BUFFER_LIVE is the draws' and is
@@ -580,7 +617,7 @@ const queueBatcher = new Batcher({
             source: 'queue',
             runId: res.runId,
             posts: queueRedditPosts({
-              items: report.naming?.items ?? usable,
+              items: report.naming?.items ?? fresh,
               dropAt,
               headline: report.headline.headline,
               now: DateTime.now(),
@@ -598,7 +635,12 @@ const queueBatcher = new Batcher({
           + 'draw closing post was not touched. Set QUEUE_LIVE=true to go live.\n')
         + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
         + `Headline (${report.headline.source}): ${report.headline.headline}\n`
-        + `Items: ${usable.length}`
+        + (repeats.length
+          ? `\n**${repeats.length} item(s) held back as last week's**, pinged because they left the `
+            + 'queue rather than joined it. If any belong in this drop, say so and they go back in.\n'
+            + repeats.map((i) => `  ${i.productName} (${i.pid}) last seen ${i.lastSeen}`).join('\n')
+          : '')
+        + `\nItems: ${fresh.length}`
         + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')
         + `\nGrid: ${report.image
             ? `${report.image.url} (${report.image.layout}, ${report.image.width}x${report.image.height})`
@@ -652,12 +694,12 @@ const potentialBatcher = new Batcher({
     const usable = items.filter((i) => i.classification !== 'excluded');
     const dropped = items.filter((i) => i.classification === 'excluded');
     try {
-      if (!usable.length) {
+      if (!fresh.length) {
         await alert(`Potential queue: ${items.length} item(s), all excluded. Nothing drafted.`);
         return;
       }
       if (!process.env.BUFFER_TOKEN) {
-        await alert(`Potential queue: ${usable.length} item(s) detected, but BUFFER_TOKEN is not set.`);
+        await alert(`Potential queue: ${fresh.length} item(s) detected, but BUFFER_TOKEN is not set.`);
         return;
       }
 

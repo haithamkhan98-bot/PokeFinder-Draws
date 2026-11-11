@@ -1423,3 +1423,34 @@ Only items whose draw date matches the stored run are taken, because the
 channel also holds queue drops and older draws and pulling those in would
 invent a run.
 
+## Last week's queue items are held back
+
+Walmart's monitor pings an item when it LEAVES the queue as well as when it
+joins, and the two embeds are identical in every field. A drop therefore
+arrives mixed with the previous week's items being cleared out: one real run of
+four items came through as fifteen, the other eleven being the week before's.
+
+Nothing in an embed separates them. The bot's own history can, because it has
+already posted last week's items. Any PID that appeared in a queue run within
+`QUEUE_REPEAT_DAYS` (default 35) is held back.
+
+Held back, not dropped. The alert names every one with the date it was last
+seen, because a product Walmart genuinely queues twice would otherwise vanish
+without trace. If one belongs in the drop, it can be put back by hand.
+
+When every item is a repeat, nothing is posted at all and the alert says the
+run looks like a clear-out rather than a drop. That is the common case for the
+ping burst that follows a queue ending.
+
+| Name | What it does |
+| --- | --- |
+| `QUEUE_REPEAT_DAYS` | How far back a repeated PID still counts as last week's. Default 35. |
+
+### Why not cross-reference the live queue page
+
+The page is readable from Railway, so this looked like the obvious fix. It is
+the wrong one. The page shows the queue running NOW, and the upcoming drop's
+items are loaded behind it: of the four items in a real upcoming drop, none
+were on the page, while two of the eleven stale pings were. Filtering on the
+page would have kept exactly the wrong items.
+

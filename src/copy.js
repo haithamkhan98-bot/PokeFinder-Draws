@@ -155,14 +155,20 @@ export function itemBlock(items) {
   return poke.length ? `${itemLines(poke)}\n\n${tail}` : tail;
 }
 
-/** The non Pokemon names for the headline, in their fixed order. */
+/**
+ * The non Pokemon names for the headline.
+ *
+ * One Piece only. Sports cards and other TCGs still appear in the item list
+ * under their own heading, but naming them in the headline spends the most
+ * valuable words in the post on the thing the audience came for least:
+ * "30th Celebration and Sports Cards Draws" reads as a sports post with
+ * Pokemon attached.
+ *
+ * One Piece is the exception because it has its own following in HK's
+ * audience and pulls engagement on its own name.
+ */
 export function otherLabels(items) {
-  const has = (c) => items.some((i) => i.classification === c);
-  const out = [];
-  if (has('onepiece')) out.push('One Piece TCG');
-  if (has('sports')) out.push('Sports Cards');
-  if (has('othertcg')) out.push('Other TCG');
-  return out;
+  return items.some((i) => i.classification === 'onepiece') ? ['One Piece TCG'] : [];
 }
 
 /**
@@ -171,6 +177,22 @@ export function otherLabels(items) {
  * Pokemon leads, 30th Anniversary leads the Pokemon sets, and anything non
  * Pokemon is named only after every Pokemon set has been.
  */
+/**
+ * Draw or Draws.
+ *
+ * Counted on the items, not on the names in the headline. Walmart runs one
+ * draw per product, so four products is four draws however many of them share
+ * a set name. It used to count headline labels, which worked only while every
+ * category was named there: once sports cards stopped being named, a draw of
+ * four products announced itself as a single "Draw".
+ */
+export function drawNoun(items) {
+  // Counted directly: everything reaching here has already been filtered to
+  // the postable items, so a second classification check would only add a way
+  // to get it wrong.
+  return (items ?? []).length > 1 ? 'Draws' : 'Draw';
+}
+
 export function headlineLabel(sets, items) {
   // One flat list joined once. Joining the Pokemon sets first and then joining
   // that result with the other categories produces a nested "and".
@@ -204,10 +226,7 @@ export const SCHEDULES = {
 export function buildPosts({ items, sets, startsAt, endsAt, variant = 'default' }) {
   const plan = SCHEDULES[variant] ?? SCHEDULES.default;
   const label = headlineLabel(sets, items);
-  // Plural once the draw spans more than one named thing, whether that is two
-  // Pokemon sets or one set plus a non Pokemon category.
-  const named = (sets.length || 0) + otherLabels(items).length;
-  const noun = named > 1 ? 'Draws' : 'Draw';
+  const noun = drawNoun(items);
   const lines = itemBlock(items);
   const when = timeLabel(startsAt);
   const link = `Enter Draw Here: ${DRAW_LINK_TWEETS}`;
@@ -294,7 +313,7 @@ export const altTextFor = ({ items, startsAt }) => {
 /** The Discord post for HK's server. Returned as text for him to paste. */
 export function discordPost({ items, sets, startsAt }) {
   const label = headlineLabel(sets, items);
-  const noun = (sets.length || 0) + otherLabels(items).length > 1 ? 'Draws' : 'Draw';
+  const noun = drawNoun(items);
   const epoch = Math.floor(startsAt.toSeconds());
   return [
     `# New Walmart Draws Beginning ${shortDate(startsAt)} at ${timeLabel(startsAt)}`,
@@ -326,7 +345,7 @@ const epoch = (dt) => Math.floor(dt.toSeconds());
  */
 export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
   const label = headlineLabel(sets, items);
-  const noun = (sets.length || 0) + otherLabels(items).length > 1 ? 'Draws' : 'Draw';
+  const noun = drawNoun(items);
   const lines = itemBlock(items);
   const link = `# Draw Link: [Walmart Collectibles Draw](${DRAW_LINK_DISCORD})`;
   const start = epoch(startsAt);

@@ -24,6 +24,28 @@ export const REPACKS = [
   /\brepack\b/i, /\bmystery\s*(power\s*)?box\b/i, /\bmystery\s*pack\b/i,
 ];
 
+/**
+ * Product shapes that are trading card products whatever else the title says.
+ *
+ * Checked before NOT_CARDS, because NOT_CARDS matches words that appear in
+ * genuine TCG product names. "30th Celebration Figure Collection, Mew and
+ * Mewtwo" is a box of cards, but it matched the figure pattern meant for Funko
+ * and Nendoroid and was dropped from a live draw: missing from the tweets, the
+ * Discord posts and the grid, with only one line in the run summary saying so.
+ *
+ * Narrow on purpose. These are product line names, not words that merely
+ * co-occur with cards, so a Pikachu plush or a Funko of a card character is
+ * still excluded.
+ */
+export const TCG_PRODUCTS = [
+  /\belite\s*trainer\s*box\b/i, /\betb\b/i, /\bbooster\b/i, /\bblister\b/i,
+  /\b(ultra\s*)?premium\s*collection\b/i, /\bfigure\s*collection\b/i,
+  /\bposter\s*collection\b/i, /\bbinder\s*collection\b/i,
+  /\bknock\s*out\s*collection\b/i, /\bbattle\s*decks?\b/i,
+  /\bmini\s*tins?\b/i, /\bcollection\s*box\b/i, /\bcard\s*game\b/i,
+  /\btrading\s*cards?\b/i, /\btcg\b/i, /\bsleeved\b/i, /\bdisplay\s*box\b/i,
+];
+
 // Walmart puts plenty of non card merchandise through the same draws. None of
 // it belongs in a PokeFinder post, so it is dropped rather than categorised.
 export const NOT_CARDS = [
@@ -113,7 +135,9 @@ export function classify(title) {
   // Merchandise is tested before the games, or a Pokemon branded plush or
   // figure would be taken for a postable Pokemon card product.
   if (REPACKS.some((re) => re.test(t))) return 'excluded';
-  if (NOT_CARDS.some((re) => re.test(t))) return 'excluded';
+  // A card product is never merchandise, however its product line is named.
+  const isCardProduct = TCG_PRODUCTS.some((re) => re.test(t));
+  if (!isCardProduct && NOT_CARDS.some((re) => re.test(t))) return 'excluded';
   if (POKEMON.some((re) => re.test(t))) return 'pokemon';
   if (ONE_PIECE.some((re) => re.test(t))) return 'onepiece';
   if (SPORTS.some((re) => re.test(t))) return 'sports';

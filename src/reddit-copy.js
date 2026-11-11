@@ -17,7 +17,7 @@ import {
   joinEnglish, shortDate, timeLabel,
 } from './copy.js';
 import { stripGroupName, timeLabel as queueTimeLabel, whenPhrase } from './queue-copy.js';
-import { raffleHeadline } from './target-copy.js';
+import { raffleHeadline, WINNERS_NOTE } from './target-copy.js';
 import { groupQueue } from './queue.js';
 
 /** Draws go to both subs. Queues go to TCGHub alone, mirroring CollectFinder. */
@@ -199,7 +199,7 @@ export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
       // title cannot be edited and "live now" stops being news tomorrow while
       // the deadline stays true for the whole window.
       title: trimTitle(`Target ${headline} ${noun} Are Live, Entries Accepted by ${deadline}`),
-      body: body(`Entries accepted until ${deadline}.`, list),
+      body: body(`Entries accepted until ${deadline}.`, list, WINNERS_NOTE),
     },
     {
       slot: 'closing',
@@ -207,7 +207,7 @@ export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
       subs: DRAW_SUBS,
       imageUrl,
       title: trimTitle(`Reminder: Target ${headline} ${noun} Close Today at ${timeLabel(closesAt)}`),
-      body: body(`Entries close at ${timeLabel(closesAt)}, one hour from now.`, list),
+      body: body(`Entries close at ${timeLabel(closesAt)}, one hour from now.`, list, WINNERS_NOTE),
     },
   ];
 }

@@ -182,3 +182,17 @@ test('with no close time there are no member posts', () => {
   // to say without one. The tweets still go out.
   assert.deepEqual(targetDiscordPosts({ items: SAMPLE, now, closesAt: null }), []);
 });
+
+test('both member Discord posts say what winning commits you to', () => {
+  for (const p of targetDiscordPosts({ items: SAMPLE, now, closesAt, role: '<@&1>' })) {
+    assert.match(p.text, /Winners will have 24 hours to complete their purchase if selected!$/);
+  }
+});
+
+test('the tweets do not carry the winners note', () => {
+  // They are already near the limit with the deadline in the opening line, and
+  // the people who need it are deciding whether to enter, not scrolling past.
+  for (const p of buildRafflePosts({ items: SAMPLE, now, closesAt })) {
+    assert.doesNotMatch(p.text, /24 hours/);
+  }
+});

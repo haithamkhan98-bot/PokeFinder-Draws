@@ -33,6 +33,7 @@ import { startBestbuyScheduler } from './bestbuy-schedule.js';
 import { probeListing, formatProbe } from './target.js';
 import { isRaffleEmbed, parseTargetRaffle, usableRaffleItems } from './target-raffle.js';
 import { targetDiscordPosts } from './target-copy.js';
+import { targetRedditPosts } from './reddit-copy.js';
 import { runTargetRaffle, summariseTarget } from './target-run.js';
 import { tickTargetReminders, LEAD_MS } from './target-schedule.js';
 import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
@@ -1314,6 +1315,21 @@ async function targetScan(message, raw) {
         : '')
       + (added.length ? '\n\nFiring the run now.' : ''),
     );
+
+    // The paste ready posts, right here, because the moment they are most
+    // wanted is immediately after pulling a draw together.
+    if (added.length || repeats.length) {
+      try {
+        const built = await targetPasteBlocks();
+        if (built.error) await message.reply(`No paste ready posts: ${built.error}`);
+        else {
+          await message.reply(built.summary);
+          for (const b of built.blocks) await message.reply(b);
+        }
+      } catch (err) {
+        await message.reply(`Could not build the paste ready posts: ${err.message}`);
+      }
+    }
   } catch (err) {
     await message.reply(`Could not scan the Target channel: ${err.message}`);
   }
@@ -1481,65 +1497,86 @@ async function drawRepair(message, raw) {
  * what to post an hour before, and seeing it in advance is the point of being
  * able to ask for it at any time.
  */
-async function targetPost(message) {
-  if (!TARGET_CHANNEL_ID) {
-    await message.reply('TARGET_CHANNEL_ID is not set, so there is no channel to read.');
-    return;
+/**
+ * The paste ready member and Reddit posts for the raffles in the channel.
+ *
+ * Shared by !targetpost and !targetscan so the two cannot drift. A scan prints
+ * them too, because the moment HK most wants the text is right after pulling a
+ * draw together, and asking him to run a second command to get it is a step
+ * that exists for no reason.
+ *
+ * Returns null with a reason rather than throwing, so a caller mid-scan can
+ * report it without losing everything else it just did.
+ */
+async function targetPasteBlocks() {
+  if (!TARGET_CHANNEL_ID) return { error: 'TARGET_CHANNEL_ID is not set.' };
+
+  const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+  if (!channel?.isTextBased?.()) return { error: 'The Target channel is not readable.' };
+
+  const fetched = await channel.messages.fetch({ limit: 60 });
+  const found = new Map();
+  for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
+    for (const embed of m.embeds ?? []) {
+      if (!isRaffleEmbed(embed)) continue;
+      const t = parseTargetRaffle(embed, { now: DateTime.now() });
+      if (t) found.set(t.tcin, t);
+    }
   }
-  try {
-    const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
-    if (!channel?.isTextBased?.()) {
-      await message.reply('The Target channel is not readable.');
-      return;
-    }
 
-    const fetched = await channel.messages.fetch({ limit: 60 });
-    const found = new Map();
-    for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
-      for (const embed of m.embeds ?? []) {
-        if (!isRaffleEmbed(embed)) continue;
-        const t = parseTargetRaffle(embed, { now: DateTime.now() });
-        if (t) found.set(t.tcin, t);
-      }
-    }
+  const usable = usableRaffleItems([...found.values()]);
+  if (!usable.length) return { error: 'No raffle listings in the last 60 messages of the Target channel.' };
 
-    const usable = usableRaffleItems([...found.values()]);
-    if (!usable.length) {
-      await message.reply('No raffle listings in the last 60 messages of the Target channel.');
-      return;
-    }
+  const naming = await nameItems(usable);
+  const named = orderedItems(naming.items.map((i, idx) => ({ ...usable[idx], ...i })));
+  const closes = await targetCloseTimeFor(named.map((i) => i.tcin));
+  if (!closes) {
+    return {
+      error: `Found ${named.length} raffle listing(s) but no close time for any of them. `
+        + 'Both the member and Reddit posts are built around the countdown, so click the '
+        + 'bookmarklet on one listing first.',
+    };
+  }
 
-    const naming = await nameItems(usable);
-    const named = orderedItems(naming.items.map((i, idx) => ({ ...usable[idx], ...i })));
-    const closes = await targetCloseTimeFor(named.map((i) => i.tcin));
-    if (!closes) {
-      await message.reply(
-        `Found ${named.length} raffle listing(s) but no close time for any of them, and the `
-        + 'member posts are built around the countdown. Click the bookmarklet on one listing first.',
-      );
-      return;
-    }
+  const closesAt = DateTime.fromJSDate(new Date(closes.closes_at));
+  const now = DateTime.now();
+  const et = (d) => d.setZone('America/New_York').toFormat('ccc LLL d, h:mma');
 
-    const closesAt = DateTime.fromJSDate(new Date(closes.closes_at));
-    const posts = targetDiscordPosts({
-      items: named,
-      now: DateTime.now(),
-      closesAt,
-      role: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
-    });
+  const discord = targetDiscordPosts({
+    items: named, now, closesAt,
+    role: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
+  });
+  const reddit = targetRedditPosts({ items: named, now, closesAt });
 
-    await message.reply(
-      `${named.length} listing(s), closing `
-      + `${closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET `
-      + `(from TCIN ${closes.tcin}).`,
+  const blocks = [];
+  for (const p of discord) {
+    blocks.push(
+      `**Discord ${p.slot === 'live' ? 'now' : `at ${et(closesAt.minus({ hours: 1 }))}`}** `
+      + `to the member channel\n\`\`\`\n${p.text}\n\`\`\``,
     );
-    for (const p of posts) {
-      await message.reply(
-        `**${p.slot === 'live' ? 'Post now' : 'Post an hour before close, '
-          + closesAt.minus({ hours: 1 }).setZone('America/New_York').toFormat('ccc h:mma')}**\n`
-        + `\`\`\`\n${p.text}\n\`\`\``,
-      );
-    }
+  }
+  for (const p of reddit) {
+    blocks.push(
+      `**Reddit ${p.slot === 'live' ? 'now' : `at ${et(closesAt.minus({ hours: 1 }))}`}** `
+      + `to ${p.subs.map((x) => `r/${x}`).join(' and ')}\n`
+      + `Title\n\`\`\`\n${p.title}\n\`\`\`\n`
+      + `Body\n\`\`\`\n${p.body}\n\`\`\``,
+    );
+  }
+
+  return {
+    summary: `${named.length} listing(s), closing ${et(closesAt)} ET (from TCIN ${closes.tcin}).`,
+    blocks,
+  };
+}
+
+/** `!targetpost` prints those blocks on demand. */
+async function targetPost(message) {
+  try {
+    const built = await targetPasteBlocks();
+    if (built.error) { await message.reply(built.error); return; }
+    await message.reply(built.summary);
+    for (const b of built.blocks) await message.reply(b);
   } catch (err) {
     await message.reply(`Could not build the Target posts: ${err.message}`);
   }

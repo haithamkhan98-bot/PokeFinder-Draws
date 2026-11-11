@@ -53,8 +53,14 @@ const fence = (s) => `\`\`\`\n${s}\n\`\`\``;
  */
 export function manualMessages(row, { limit = DISCORD_LIMIT } = {}) {
   const when = row.slot === 'announcement' ? 'now' : `the ${row.slot} beat`;
+  // One row per sub is how the queue stores them, because the API path submits
+  // to each separately. For pasting, identical posts are one job: saying the
+  // same block twice invites pasting the same text twice or skipping the
+  // second by mistake.
+  const subs = row.subs ?? [row.sub];
+  const where = subs.map((x) => `r/${x}`).join(' and ');
   const head = [
-    `**Reddit post ready to paste** r/${row.sub}, ${when}`,
+    `**Reddit post ready to paste** ${where}, ${when}`,
     row.image_url ? `Image: ${row.image_url}` : 'No image for this one.',
     '',
     '**Title**',

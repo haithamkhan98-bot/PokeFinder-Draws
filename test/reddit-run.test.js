@@ -206,3 +206,49 @@ test('a single over-long line goes out alone rather than failing the batch', () 
 test('no image says so rather than leaving a bare label', () => {
   assert.match(manualMessages(row({ image_url: null }))[0], /No image for this one\./);
 });
+
+import { groupIdentical } from '../src/reddit-run.js';
+
+test('identical posts to both subs become one paste block', () => {
+  const rows = [
+    row({ id: 1, sub: 'PokeCollectors' }),
+    row({ id: 2, sub: 'TCGHub' }),
+  ];
+  const jobs = groupIdentical(rows);
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].subs, ['PokeCollectors', 'TCGHub']);
+  assert.deepEqual(jobs[0].ids, [1, 2]);
+});
+
+test('posts that genuinely differ stay separate', () => {
+  // Keyed on the text, so a future per-sub variant splits without this code
+  // needing to know why.
+  const jobs = groupIdentical([
+    row({ id: 1, sub: 'PokeCollectors', body: 'Pokemon only' }),
+    row({ id: 2, sub: 'TCGHub', body: 'Pokemon and One Piece' }),
+  ]);
+  assert.equal(jobs.length, 2);
+});
+
+test('different slots are never merged', () => {
+  const jobs = groupIdentical([
+    row({ id: 1, sub: 'PokeCollectors', slot: 'live' }),
+    row({ id: 2, sub: 'PokeCollectors', slot: 'closing' }),
+  ]);
+  assert.equal(jobs.length, 2);
+});
+
+test('a grouped job marks every row it covers, so none is redelivered', async () => {
+  const marked = [];
+  const sent = [];
+  await tickReddit({
+    claim: async () => [row({ id: 1, sub: 'PokeCollectors' }), row({ id: 2, sub: 'TCGHub' })],
+    markPosted: async (id) => marked.push(id),
+    alert: async (t) => sent.push(t),
+    pauseMs: 0,
+  });
+  assert.deepEqual(marked.sort(), [1, 2]);
+  // One delivery, naming both subs.
+  assert.match(sent[0], /r\/PokeCollectors and r\/TCGHub/);
+  assert.equal(sent.filter((m) => m.includes('ready to paste')).length, 1);
+});

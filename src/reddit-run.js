@@ -100,8 +100,13 @@ export async function tickReddit({
     return [{ skipped: 'Reddit is not connected yet', due: rows.length }];
   }
 
+  // In manual mode, rows that would paste identically are delivered once with
+  // every sub named. The API path keeps them separate, because each sub is its
+  // own submission with its own id and approval.
+  const jobs = manual ? groupIdentical(rows) : rows;
+
   const done = [];
-  for (const [i, row] of rows.entries()) {
+  for (const [i, row] of jobs.entries()) {
     // Spaced out, because consecutive submissions from one account inside a
     // second is what Reddit's spam heuristics look for.
     // Only the API path needs spacing out; Reddit's rate limits are about
@@ -109,8 +114,12 @@ export async function tickReddit({
     if (i > 0 && pauseMs && !manual) await new Promise((r) => setTimeout(r, pauseMs));
     try {
       const r = manual ? await deliverManually(row, { alert }) : await post(row);
-      await markPosted(row.id, { fullname: r.fullname, permalink: r.url, approved: r.approved });
-      done.push({ ...r, sub: row.sub, slot: row.slot, source: row.source });
+      // Every row the job covers is marked, not just the first, or the others
+      // would be redelivered on the next tick.
+      for (const id of row.ids ?? [row.id]) {
+        await markPosted(id, { fullname: r.fullname, permalink: r.url, approved: r.approved });
+      }
+      done.push({ ...r, sub: row.sub, subs: row.subs, slot: row.slot, source: row.source });
 
       if (alert && !r.manual && (r.imageError || r.approveError)) {
         await alert(
@@ -122,7 +131,7 @@ export async function tickReddit({
         );
       }
     } catch (err) {
-      await markFailed(row.id, err.message);
+      for (const id of row.ids ?? [row.id]) await markFailed(id, err.message);
       done.push({ sub: row.sub, slot: row.slot, error: err.message });
       if (alert) {
         await alert(`Reddit ${row.slot} to r/${row.sub} failed `
@@ -138,4 +147,23 @@ export function summariseReddit(queued) {
   if (!queued.length) return 'no Reddit posts queued';
   return queued.map((q) => `  r/${q.sub.padEnd(16)} ${q.slot.padEnd(13)} `
     + `${q.dueAt ? q.dueAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') : 'immediately'}`).join('\n');
+}
+
+/**
+ * Collapse rows that would paste identically into one job.
+ *
+ * Keyed on the text rather than on the slot, so posts that genuinely differ
+ * between subs stay separate without anything here needing to know why they
+ * differ.
+ */
+export function groupIdentical(rows) {
+  const byContent = new Map();
+  for (const row of rows) {
+    const key = `${row.source}|${row.run_id}|${row.slot}|${row.title}|${row.body}|${row.image_url ?? ''}`;
+    if (!byContent.has(key)) byContent.set(key, { ...row, subs: [], ids: [] });
+    const job = byContent.get(key);
+    job.subs.push(row.sub);
+    job.ids.push(row.id);
+  }
+  return [...byContent.values()];
 }

@@ -146,6 +146,16 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
  * `role` must be the mention string `<@&id>`. Discord renders the literal text
  * "@PokeFinder+" without pinging anyone.
  */
+/**
+ * What happens if you win.
+ *
+ * On the member and Reddit posts but NOT the tweets: those are already near
+ * the character limit with the deadline in the opening line, and the people
+ * who need this are the ones deciding whether to enter rather than the ones
+ * scrolling past.
+ */
+export const WINNERS_NOTE = 'Winners will have 24 hours to complete their purchase if selected!';
+
 export function targetDiscordPosts({ items, now, closesAt, role = '@PokeFinder+' }) {
   if (!closesAt) return [];
   const headline = raffleHeadline(items);
@@ -167,6 +177,8 @@ export function targetDiscordPosts({ items, now, closesAt, role = '@PokeFinder+'
         '',
         `**Items in These ${noun}:**`,
         lines,
+        '',
+        WINNERS_NOTE,
       ].join('\n'),
     },
     {
@@ -179,6 +191,8 @@ export function targetDiscordPosts({ items, now, closesAt, role = '@PokeFinder+'
         '',
         `**Items in These ${noun}:**`,
         lines,
+        '',
+        WINNERS_NOTE,
       ].join('\n'),
     },
   ];

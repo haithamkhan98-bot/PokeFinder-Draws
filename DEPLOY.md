@@ -1495,8 +1495,14 @@ queued" would convict every item at once; "no signal" convicts nothing.
 
 ### `!targetpost`
 
-Prints the two member Discord posts for the raffles currently in the channel,
-in code blocks, ready to paste.
+Prints the member Discord posts AND the Reddit posts for the raffles currently
+in the channel, in code blocks, ready to paste. Four blocks: Discord live,
+Discord closing, Reddit live, Reddit closing.
+
+`!targetscan` prints the same blocks after it fires, because the moment they
+are most wanted is immediately after pulling a draw together, and making that
+a second command is a step that exists for no reason. Both use one builder so
+they cannot drift apart.
 
 Built by reading the channel rather than from a stored run, so it works
 whether or not a run has fired and whatever `TARGET_LIVE` is set to. That
@@ -1505,6 +1511,12 @@ until it is, this is the only way to get the text.
 
 Both beats are printed, the live one and the hour-before-close one, because
 seeing the second in advance is the point of being able to ask at any time.
+
+Every member and Reddit post ends with "Winners will have 24 hours to complete
+their purchase if selected!". Not on the tweets: those are already near the
+character limit with the deadline in the opening line, and the people who need
+this are the ones deciding whether to enter rather than the ones scrolling
+past.
 
 Needs a close time, since the posts are built around the countdown. Without one
 it says so rather than printing a post with a hole in it.

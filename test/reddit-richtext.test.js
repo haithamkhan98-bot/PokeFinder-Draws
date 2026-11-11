@@ -157,3 +157,10 @@ test('a Target title over 300 characters is trimmed on a word boundary', () => {
   assert.ok(live.title.length <= 300, `title was ${live.title.length}`);
   assert.doesNotMatch(live.title, /\s$/);
 });
+
+test('both Target Reddit posts say what winning commits you to', () => {
+  const posts = targetRedditPosts({ items: ITEMS, now: NOW, closesAt: CLOSES });
+  for (const p of posts) {
+    assert.match(p.body, /Winners will have 24 hours to complete their purchase if selected!$/);
+  }
+});

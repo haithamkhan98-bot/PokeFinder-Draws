@@ -1279,21 +1279,33 @@ async function drawRepair(message, raw) {
     const sheet = await loadAffiliateLinks().catch(() => null);
     const fetched = await channel.messages.fetch({ limit });
     const seen = new Map();
+    const scanned = [];
     for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
       for (const embed of m.embeds ?? []) {
         let item;
         try { item = parseEmbed(embed, { now: DateTime.now(), sheet }); } catch { continue; }
+        if (!item) continue;
+        scanned.push(item);
         // Only this draw's items. The channel holds queue drops and older
         // draws too, and pulling those in would invent a run.
-        if (!item || item.drawDate !== run.draw_date) continue;
+        if (item.drawDate !== run.draw_date) continue;
         if (!isPostable(item.classification)) continue;
         seen.set(item.pid, item);
       }
     }
 
     if (!seen.size) {
-      await message.reply(`Re-read ${fetched.size} message(s) and found no items for ${run.draw_date}. `
-        + 'Try a larger count, for example `!drawrepair 100`.');
+      // Says what it DID see, so a date mismatch is visible rather than
+      // reading as an empty channel. The first version of this message said
+      // only "found no items" and sent HK to re-run with a bigger number when
+      // the real fault was comparing a string to a Date.
+      const dates = [...new Set(scanned.map((i) => i.drawDate).filter(Boolean))];
+      await message.reply(
+        `Re-read ${fetched.size} message(s) and found no items for draw date ${run.draw_date}.\n`
+        + (dates.length
+          ? `Draw dates actually seen: ${dates.join(', ')}.`
+          : 'No draw embeds at all in that many messages, so try a larger count.'),
+      );
       return;
     }
 

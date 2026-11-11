@@ -813,4 +813,31 @@ export async function drawBufferPosts(runId) {
   return rows;
 }
 
+/**
+ * PIDs that appeared in an earlier queue run, with when they last did.
+ *
+ * Walmart's monitor pings an item when it LEAVES the queue as well as when it
+ * joins, and the two embeds are identical. A drop therefore arrives mixed with
+ * last week's items being cleared out: one real run of four items came through
+ * as fifteen, eleven of them the previous week's.
+ *
+ * Nothing in an embed can tell the two apart, but the bot has already seen
+ * last week's items, so its own history can. Bounded by a window because a
+ * product genuinely queued again months later is a new drop, not a repeat.
+ */
+export async function previousQueuePids({ beforeDropDate, days = 35 }) {
+  const { rows } = await pool.query(
+    `SELECT qi.pid, MAX(qr.drop_date) AS last_seen
+       FROM queue_items qi
+       JOIN queue_runs qr ON qr.id = qi.run_id
+      WHERE qr.drop_date < $1
+        AND qr.drop_date >= ($1::date - ($2::int))
+      GROUP BY qi.pid`,
+    [beforeDropDate, days],
+  );
+  return new Map(rows.map((r) => [
+    String(r.pid),
+    typeof r.last_seen === 'string' ? r.last_seen : r.last_seen.toISOString().slice(0, 10),
+  ]));
+}
 

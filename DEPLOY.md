@@ -1148,6 +1148,16 @@ through it with no other change.
 
 ### Manual mode
 
+Posts that would paste identically to both subs are delivered **once**, with
+both named: "Reddit post ready to paste r/PokeCollectors and r/TCGHub". The
+queue stores one row per sub because the API path submits to each separately,
+but for pasting they are one job, and saying the same block twice invites
+pasting the same text twice or skipping the second by mistake. Every row the
+job covers is marked, so none is redelivered on the next tick.
+
+Grouping is keyed on the text, not the slot, so a post that genuinely differs
+between subs stays separate without this code needing to know why.
+
 Each due post arrives as a title in its own code block and a body in another,
 so each can be copied in one gesture without picking up the other. Code blocks
 also stop Discord rendering the markdown, which would turn the links into

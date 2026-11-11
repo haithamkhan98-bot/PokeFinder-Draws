@@ -1396,3 +1396,30 @@ land in one run.
 
 It also prints the author and field names of anything it skipped, which is the
 fastest way to tell a wrong discriminator from an empty channel.
+
+### `!drawrepair [n]`
+
+Re-reads the last n messages of the Walmart channel (default 60, max 100),
+reparses them with the current classifier, and puts back anything the stored
+run is missing.
+
+It exists because a run is saved with only the items that were postable at the
+time. When a classifier bug drops a real product, there is nothing in the
+database to rebuild from once the bug is fixed: the item has to be recovered
+from the channel. That is not hypothetical, it is how a Figure Collection went
+missing from a live draw.
+
+Repairs rather than re-runs. The announcement has already gone out on both X
+accounts and in Discord and cannot be unsent, so it is left alone, along with
+the wins draft. Everything else is rewritten:
+
+- the item is added back to the run
+- the grid is rebuilt, since it is one composed image and the missing product
+  has to take its place among the others
+- every unpublished Buffer post is edited on both channels
+- every pending Discord post is rewritten
+
+Only items whose draw date matches the stored run are taken, because the
+channel also holds queue drops and older draws and pulling those in would
+invent a run.
+

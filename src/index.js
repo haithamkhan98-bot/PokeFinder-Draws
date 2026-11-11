@@ -16,9 +16,15 @@ import { buildQueuePosts, linkList, drawOverWithQueue } from './queue-copy.js';
 import { buildGrid } from './grid.js';
 import { queueHeadline } from './naming.js';
 import { nextDropAt } from './queue.js';
-import { buildPosts, winsPost, buildDiscordPosts, itemBlock, orderedPokemon, orderedItems } from './copy.js';
+import {
+  buildPosts, winsPost, buildDiscordPosts, itemBlock, orderedPokemon, orderedItems, altTextFor,
+} from './copy.js';
 import { startDiscordScheduler } from './discord-schedule.js';
-import { scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost } from './db.js';
+import { editPost, CHANNELS } from './buffer.js';
+import {
+  scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost,
+  addDrawItems, drawBufferPosts, setRunImage,
+} from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
 import { parseSummaryEmbed, SUMMARY_AUTHOR, nextPostAt, byRegion, parseStates, POST_HOUR } from './bestbuy.js';
 import { bestbuyDigest } from './bestbuy-copy.js';
@@ -1245,6 +1251,144 @@ async function targetScan(message, raw) {
   }
 }
 
+/**
+ * `!drawrepair [n]` re-reads the Walmart channel and repairs the last draw.
+ *
+ * Exists because a classifier bug dropped a real product from a live draw.
+ * The run is stored with only the items that were postable at the time, so
+ * once the bug is fixed there is nothing in the database to rebuild from: the
+ * item has to be recovered from the channel.
+ *
+ * Repairs rather than re-runs. The announcement has already gone out on both
+ * X accounts and in Discord and cannot be unsent, so it is left alone and only
+ * the unpublished posts are rewritten. Anything already sent is reported, not
+ * touched.
+ */
+async function drawRepair(message, raw) {
+  const limit = Math.min(Math.max(parseInt(raw, 10) || 60, 1), 100);
+  try {
+    const run = await latestDrawRun();
+    if (!run) { await message.reply('No fired draw run to repair.'); return; }
+
+    const channel = await client.channels.fetch(WALMART_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) {
+      await message.reply('The Walmart channel is not readable, so there is nothing to re-read.');
+      return;
+    }
+
+    const sheet = await loadAffiliateLinks().catch(() => null);
+    const fetched = await channel.messages.fetch({ limit });
+    const seen = new Map();
+    for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
+      for (const embed of m.embeds ?? []) {
+        let item;
+        try { item = parseEmbed(embed, { now: DateTime.now(), sheet }); } catch { continue; }
+        // Only this draw's items. The channel holds queue drops and older
+        // draws too, and pulling those in would invent a run.
+        if (!item || item.drawDate !== run.draw_date) continue;
+        if (!isPostable(item.classification)) continue;
+        seen.set(item.pid, item);
+      }
+    }
+
+    if (!seen.size) {
+      await message.reply(`Re-read ${fetched.size} message(s) and found no items for ${run.draw_date}. `
+        + 'Try a larger count, for example `!drawrepair 100`.');
+      return;
+    }
+
+    const had = new Set(run.items.map((i) => String(i.pid)));
+    const recovered = [...seen.values()].filter((i) => !had.has(String(i.pid)));
+    if (!recovered.length) {
+      await message.reply(`Re-read ${fetched.size} message(s). All ${seen.size} item(s) for `
+        + `${run.draw_date} are already in the run, so there is nothing to repair.`);
+      return;
+    }
+
+    await message.reply(`Recovering ${recovered.length} item(s) into ${run.draw_date}: `
+      + `${recovered.map((i) => i.productName).join('; ')}\nRebuilding the image and the posts.`);
+
+    await addDrawItems(run.id, recovered);
+    const full = await latestDrawRun();
+
+    const naming = await nameItems(full.items);
+    const named = orderedItems(naming.items.map((i, idx) => ({ ...full.items[idx], ...i })));
+    const sets = setsOf(named);
+    const startsAt = DateTime.fromJSDate(full.starts_at).setZone('America/New_York');
+    const endsAt = DateTime.fromJSDate(full.ends_at).setZone('America/New_York');
+
+    // The grid has to be rebuilt, not patched: it is one composed image and
+    // the missing product has to take its place among the others.
+    let image = null;
+    let imageError = null;
+    try {
+      const photos = await Promise.all(named.map(async (i) => {
+        try { return { pid: i.pid, buffer: (await fetchAndTrim(i.imageUrl)).buffer }; }
+        catch { return { pid: i.pid, buffer: undefined }; }
+      }));
+      const byPid = new Map(photos.map((p) => [p.pid, p]));
+      image = await buildDrawImage({
+        runId: full.id,
+        drawDate: full.draw_date,
+        startsAt,
+        items: orderedPokemon(named).map((i) => ({ ...i, buffer: byPid.get(i.pid)?.buffer })),
+      });
+      if (image?.url) await setRunImage(full.id, image.url);
+    } catch (err) {
+      imageError = err.message;
+    }
+
+    // Buffer. The announcement and the wins draft are left alone: the first
+    // has published and the second is HK's to send by hand.
+    const recorded = await drawBufferPosts(full.id);
+    const byChannel = {
+      [CHANNELS.pokemonfindr]: buildPosts({ items: named, sets, startsAt, endsAt, variant: 'default' }),
+      [CHANNELS.collectfinder]: buildPosts({ items: named, sets, startsAt, endsAt, variant: 'collectfinder' }),
+    };
+    const altText = altTextFor({ items: named, startsAt });
+
+    const edited = [];
+    const refused = [];
+    for (const row of recorded) {
+      if (row.slot === 'announcement' || row.slot === 'wins_draft') continue;
+      const post = byChannel[row.channelId]?.find((p) => p.slot === row.slot);
+      if (!post) continue;
+      try {
+        await editPost({
+          postId: row.bufferPostId,
+          text: post.text,
+          imageUrl: image?.url ?? full.image_url ?? null,
+          altText,
+        });
+        edited.push(`${row.slot} on ${row.channelId === CHANNELS.pokemonfindr ? 'PokemonFindr' : 'CollectFinder'}`);
+      } catch (err) {
+        refused.push(`${row.slot}: ${err.message}`);
+      }
+    }
+
+    // Discord, pending rows only.
+    const dposts = buildDiscordPosts({ items: named, sets, startsAt, endsAt, role: ROLE_MENTION });
+    const dUpdated = [];
+    for (const d of dposts) {
+      const updated = await updatePendingDiscordPost({
+        runId: full.id, slot: d.slot, body: d.text, imageUrl: image?.url ?? full.image_url ?? null,
+      });
+      if (updated) dUpdated.push(d.slot);
+    }
+
+    await message.reply(
+      `**Repaired ${full.draw_date}** now ${named.length} item(s)\n`
+      + `Image: ${image?.url ?? `not rebuilt. ${imageError}`}\n`
+      + `Buffer: ${edited.length ? `updated ${edited.join(', ')}` : 'nothing updated'}`
+      + `${refused.length ? `\n  refused: ${refused.join('; ')}` : ''}\n`
+      + `Discord: ${dUpdated.length ? `updated ${dUpdated.join(', ')}` : 'no pending posts'}\n`
+      + 'The announcement is unchanged on both accounts and in Discord, since it has already gone out.',
+    );
+  } catch (err) {
+    await message.reply(`Could not repair the draw: ${err.message}`);
+  }
+}
+
 /** `!bbstatus` prints the BestBuy settings as this process actually reads them. */
 async function bestbuyStatus(message) {
   const line = (name, v, on) => `${on ? 'ON ' : 'OFF'}  ${name} = ${flagRaw(v)}`;
@@ -1490,6 +1634,9 @@ client.on(Events.MessageCreate, async (message) => {
     if (bbfill) { await bestbuyBackfill(message, bbfill[1]); return; }
 
     if (/^!drawrefresh$/i.test(content)) { await drawRefresh(message); return; }
+
+    const drepair = content.match(/^!drawrepair(?:\s+(\d+))?$/i);
+    if (drepair) { await drawRepair(message, drepair[1]); return; }
 
     if (/^!sheet$/i.test(content)) {
       forgetSheet();

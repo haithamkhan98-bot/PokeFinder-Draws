@@ -767,3 +767,46 @@ export async function latestRedditPost(source = null) {
   return rows[0] ?? null;
 }
 
+/**
+ * Add or update items on a run that has already fired.
+ *
+ * saveRun refuses to touch a run past "collecting", which is right for the
+ * normal path: a fired run must not be silently rewritten by a late embed.
+ * This is the deliberate repair case, where an item was wrongly excluded by a
+ * classifier bug and has to be put back.
+ *
+ * Returns the pids that were genuinely new, so the caller can say what it
+ * recovered rather than claiming to have fixed something that was never wrong.
+ */
+export async function addDrawItems(runId, items) {
+  const added = [];
+  for (const it of items) {
+    const { rows } = await pool.query(
+      `INSERT INTO draw_items
+         (run_id, pid, raw_title, product_name, price_display, price_cents, image_url, classification)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (run_id, pid) DO UPDATE
+         SET raw_title = EXCLUDED.raw_title, product_name = EXCLUDED.product_name,
+             price_display = EXCLUDED.price_display, price_cents = EXCLUDED.price_cents,
+             image_url = EXCLUDED.image_url, classification = EXCLUDED.classification,
+             withdrawn = FALSE
+       RETURNING pid, (xmax = 0) AS inserted`,
+      [runId, it.pid, it.rawTitle, it.productName, it.priceDisplay,
+       it.priceCents, it.imageUrl, it.classification],
+    );
+    if (rows[0]?.inserted) added.push(rows[0].pid);
+  }
+  return added;
+}
+
+/** The Buffer posts recorded for a run, so a repair can edit them. */
+export async function drawBufferPosts(runId) {
+  const { rows } = await pool.query(
+    `SELECT slot, channel_id AS "channelId", buffer_post_id AS "bufferPostId"
+       FROM buffer_posts WHERE run_id = $1 ORDER BY id`,
+    [runId],
+  );
+  return rows;
+}
+
+

@@ -1423,3 +1423,23 @@ Only items whose draw date matches the stored run are taken, because the
 channel also holds queue drops and older draws and pulling those in would
 invent a run.
 
+## Federal holidays hold a queue drop as drafts
+
+Walmart moves drops off federal holidays. The November 2026 queue went from
+Wednesday the 11th to Thursday the 12th for Veterans Day, and said so nowhere
+the bot can see: queue embeds carry no date at all, so the run is dated by the
+bot's own "next Wednesday at 9PM" rule.
+
+The bot cannot know the new date, because Walmart does not publish one. What it
+can do is notice that its assumed date is a holiday and refuse to publish on
+it. The run still builds, the posts are still written, everything is held as
+drafts, and the alert names the holiday and says to check the real date and
+item list before sending.
+
+`src/holidays.js` computes the floating holidays rather than listing them, so
+it does not quietly expire at the end of a hardcoded year. The observed-holiday
+shift, where a Sunday holiday is observed on the Monday, is deliberately not
+applied: retail does not close for the observance, and what is being detected
+is whether Walmart is likely to move a drop, not whether federal offices are
+shut.
+

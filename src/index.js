@@ -547,6 +547,8 @@ const queueBatcher = new Batcher({
       }
 
       const dropAt = usable[0].dropAt;
+      const holiday = holidayOn(dropDate);
+
       const res = await saveQueueRun({ dropDate, dropsAt: dropAt.toISO(), items: usable });
       if (res.amend) {
         await alert(`Queue drop ${dropDate} already ran (status ${res.status}) and more items arrived. Needs handling by hand.`);
@@ -566,8 +568,16 @@ const queueBatcher = new Batcher({
         // Queue posts have their own flag. BUFFER_LIVE is the draws' and is
         // already on; the queue stays in drafts until QUEUE_LIVE says
         // otherwise, so the first real run can be checked before it posts.
-        asDraft: !flag(QUEUE_LIVE),
-        publishAnnouncement: flag(QUEUE_LIVE),
+        // A drop dated onto a federal holiday is almost certainly not
+        // happening that day. Walmart moved the November 2026 queue from
+        // Wednesday the 11th to Thursday the 12th for Veterans Day, and said
+        // so nowhere the bot can see: the embeds carry no date at all, so the
+        // run was dated by the bot's own "next Wednesday" rule.
+        //
+        // The bot cannot know the real date, so it does the one safe thing and
+        // refuses to publish, leaving drafts and saying why.
+        asDraft: !flag(QUEUE_LIVE) || Boolean(holiday),
+        publishAnnouncement: flag(QUEUE_LIVE) && !holiday,
       });
 
       // Same ordering as the draws: after Buffer, on its own flag, and a
@@ -596,6 +606,12 @@ const queueBatcher = new Batcher({
         `**Queue run ready** ${dropDate} (fired on ${reason}, run #${res.runId})\n`
         + (flag(QUEUE_LIVE) ? '' : 'DRAFTS ONLY. Nothing is scheduled or published and the '
           + 'draw closing post was not touched. Set QUEUE_LIVE=true to go live.\n')
+        + (holiday
+          ? `**HELD AS DRAFTS: ${dropDate} is ${holiday}.** Walmart usually moves a drop off a `
+            + 'federal holiday, and the embeds carry no date, so this run was dated by the next '
+            + 'Wednesday rule rather than by anything Walmart said. Check the real date and the '
+            + 'real item list on the queue page, then correct the drafts before sending.\n'
+          : '')
         + `Drop: ${dropAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma')} ET\n`
         + `Headline (${report.headline.source}): ${report.headline.headline}\n`
         + `Items: ${usable.length}`

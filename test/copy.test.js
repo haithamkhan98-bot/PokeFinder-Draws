@@ -284,9 +284,10 @@ test('member posts use the Discord link, never the tweet one', () => {
   }
 });
 
-test('only the one hour reminder carries the tips block', () => {
+test('the one hour and going live posts carry the tips block', () => {
   assert.ok(dBySlot.one_hour.text.includes('**Tips for Success:**'));
-  assert.ok(!dBySlot.going_live.text.includes('Tips for Success'));
+  assert.ok(dBySlot.going_live.text.includes('**Tips for Success:**'));
+  assert.ok(!dBySlot.announcement.text.includes('Tips for Success'));
   assert.ok(!dBySlot.ten_left.text.includes('Tips for Success'));
 });
 

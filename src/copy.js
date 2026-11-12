@@ -396,6 +396,8 @@ export function buildDiscordPosts({ items, sets, startsAt, endsAt, role }) {
         '',
         '**Items in This Draw:**',
         lines,
+        '',
+        TIPS.replace('Tips for Success:', '**Tips for Success:**'),
         link,
       ].join('\n'),
     },

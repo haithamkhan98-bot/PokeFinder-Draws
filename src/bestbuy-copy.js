@@ -7,7 +7,8 @@
 import { shortenQueueName } from './queue-copy.js';
 import { joinEnglish, orderedPokemon } from './copy.js';
 import { DateTime } from 'luxon';
-import { classifyQueue } from './queue.js';
+import { classifyQueue, GROUP_ORDER, GROUP_LABEL } from './queue.js';
+import { stripGroupName } from './queue-copy.js';
 
 export const DISCORD_LIMIT = 2000;
 
@@ -58,10 +59,12 @@ const shortLine = (i) => `• **${i.name}**${i.priceDisplay ? ` ${i.priceDisplay
  * `date` is the morning it posts, shown in the title so one day's post is
  * not mistaken for another's further up the channel.
  *
- * Ordering, as HK set it: 30th Celebration leads, inside it the products run
- * Ultra or Super Premium, Booster Box, Elite Trainer Box, Booster Bundle,
- * blister. Everything after that is ranked by units alone, biggest restock
- * first, whatever the set or game.
+ * Ordering, as HK set it: Pokemon leads, unheaded. 30th Celebration comes
+ * first in it, its products running Ultra or Super Premium, Booster Box,
+ * Elite Trainer Box, Booster Bundle, blister; the rest of Pokemon follows by
+ * units, biggest restock first. Every other game follows under its own bold
+ * heading (One Piece, Magic: The Gathering, Sports Cards, Other), each by
+ * units.
  *
  * `items` may carry `postName` and `set` from `nameItems`, the same naming the
  * draws use. Without them it falls back to the BestBuy title shortener, and
@@ -79,7 +82,6 @@ export function digestDate(date) {
 }
 
 export function bestbuyDigest({ items, role, checkerChannel, date = null }) {
-
   const named = items
     .map((i) => {
       const group = classifyQueue(i.rawTitle);
@@ -90,10 +92,23 @@ export function bestbuyDigest({ items, role, checkerChannel, date = null }) {
     .filter((i) => i.group !== 'excluded' && !i.merch)
     .sort((a, b) => b.units - a.units);
 
-  const lead = (i) => i.group === 'pokemon' && isThirtieth(i);
-  // `named` is already biggest first, so the rest keeps that order.
-  const usable = [...orderedPokemon(named.filter(lead)), ...named.filter((i) => !lead(i))];
-
+  // Pokemon first and unheaded, as in every other post: 30th Celebration by
+  // product shape, then the rest of Pokemon by stock. `named` is already
+  // biggest first, so the filters keep that order.
+  const poke = named.filter((i) => i.group === 'pokemon');
+  const groups = [{
+    label: null,
+    items: [...orderedPokemon(poke.filter(isThirtieth)), ...poke.filter((i) => !isThirtieth(i))],
+  }];
+  // Every other game under its own heading, in the usual game order, each by
+  // stock. The heading carries the game, so the lines drop it.
+  for (const game of GROUP_ORDER.filter((g) => g !== 'pokemon')) {
+    const inGroup = named.filter((i) => i.group === game)
+      .map((i) => ({ ...i, name: stripGroupName(i.name, game) || i.name }));
+    if (inGroup.length) groups.push({ label: GROUP_LABEL[game], items: inGroup });
+  }
+  const live = groups.filter((g) => g.items.length);
+  const usable = live.flatMap((g) => g.items);
   if (!usable.length) return null;
 
   const day = digestDate(date);
@@ -103,27 +118,32 @@ export function bestbuyDigest({ items, role, checkerChannel, date = null }) {
 
   // The list is the post. Everything the reader acts on is in it, so the
   // opening line no longer repeats every product name before they reach it.
-  const build = (lines) => [head, intro, lines.join('\n'), tail].join('\n\n');
+  // `upTo` caps how many products are listed, for the truncated form.
+  const build = (line, upTo = usable.length) => {
+    let left = upTo;
+    const blocks = [];
+    for (const g of live) {
+      if (left <= 0) break;
+      const shown = g.items.slice(0, left);
+      left -= shown.length;
+      const lines = shown.map(line).join('\n');
+      blocks.push(g.label ? `**${g.label}**\n${lines}` : lines);
+    }
+    const more = usable.length - upTo;
+    if (more > 0) blocks.push(`• and ${more} more`);
+    return [head, intro, ...blocks, tail].join('\n\n');
+  };
 
-  const full = build(usable.map(productLine));
+  const full = build(productLine);
   if (full.length <= DISCORD_LIMIT) return { text: full, form: 'full', items: usable };
 
   // Too long for one Discord message. Drop the counts rather than silently
   // cutting products off the bottom: which products dropped matters more.
-  const compact = build(usable.map(shortLine));
+  const compact = build(shortLine);
   if (compact.length <= DISCORD_LIMIT) return { text: compact, form: 'compact', items: usable };
 
   // A very large night. Keep as many names as fit, and say how many are left.
-  const fit = [];
-  for (const i of usable) {
-    const next = [...fit.map(shortLine), `• and ${usable.length - fit.length} more`];
-    if (build(next).length > DISCORD_LIMIT) break;
-    fit.push(i);
-  }
-  const remaining = usable.length - fit.length;
-  return {
-    text: build([...fit.map(shortLine), ...(remaining ? [`• and ${remaining} more`] : [])]),
-    form: 'truncated',
-    items: usable,
-  };
+  let fit = usable.length - 1;
+  while (fit > 0 && build(shortLine, fit).length > DISCORD_LIMIT) fit -= 1;
+  return { text: build(shortLine, fit), form: 'truncated', items: usable };
 }

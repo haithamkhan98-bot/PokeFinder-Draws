@@ -92,23 +92,31 @@ test('BestBuy titles shorten to how a collector writes them', () => {
 const item = (rawTitle, units, regions, extra = {}) =>
   ({ rawTitle, units, states: 40, regions, priceDisplay: '$49.99', merch: false, ...extra });
 
-// HK's order: 30th Celebration first, then everything else by units alone.
-test('30th Celebration leads, then the rest run by stock whatever the game', () => {
+// HK's order: Pokemon first (30th Celebration, then the rest by stock), then
+// each other game under its own heading, by stock.
+test('Pokemon leads, 30th Celebration first, and other games sit under their own headings', () => {
   const d = bestbuyDigest({
     items: [
       item('Pokemon TCG Prismatic Evolutions Booster Bundle', 300, { West: 300 }),
+      item('Pokemon TCG Mega Evolution Elite Trainer Box', 800, { West: 800 }),
       item('2026 Topps Bowman Chrome Football Value Box', 9000, { West: 9000 }),
       item('One Piece Card Game OP-11 Booster Box', 5000, { West: 5000 }),
+      item('One Piece Card Game OP-12 Booster Box', 7000, { West: 7000 }),
       item('Pokemon TCG 30th Celebration Booster Bundle', 50, { West: 50 }),
       item('Pokemon TCG 30th Celebration Elite Trainer Box', 100, { West: 100 }),
     ],
     role: '<@&1>', checkerChannel: '<#2>',
   });
   const order = ['30th Celebration ETB', '30th Celebration Booster Bundle',
-    'Topps Bowman Chrome Football Value Box', 'One Piece OP-11 Booster Box', 'Prismatic Evolutions Booster Bundle'];
+    'Mega Evolution ETB', 'Prismatic Evolutions Booster Bundle',
+    '**One Piece**', '**OP-12 Booster Box**', '**OP-11 Booster Box**',
+    '**Sports Cards**', 'Topps Bowman Chrome Football Value Box'];
   const at = order.map((s) => d.text.indexOf(s));
-  assert.ok(at.every((x) => x !== -1), at.join());
-  assert.deepEqual([...at].sort((a, b) => a - b), at, 'product shape inside 30th Celebration, stock after it');
+  assert.ok(at.every((x) => x !== -1), order.filter((_, n) => at[n] === -1).join(', '));
+  assert.deepEqual([...at].sort((a, b) => a - b), at);
+  // Pokemon carries no heading of its own.
+  assert.ok(!d.text.includes('**Pokemon**'));
+  assert.match(d.text, /\n\n\*\*One Piece\*\*\n• \*\*OP-12 Booster Box\*\*/);
 });
 
 test('the title carries the morning it posts', () => {

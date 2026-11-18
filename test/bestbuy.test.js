@@ -92,20 +92,33 @@ test('BestBuy titles shorten to how a collector writes them', () => {
 const item = (rawTitle, units, regions, extra = {}) =>
   ({ rawTitle, units, states: 40, regions, priceDisplay: '$49.99', merch: false, ...extra });
 
-// Same priority as the draws and the queues: Pokemon leads whatever the
-// numbers say, then One Piece, Magic, sports, everything else.
-test('Pokemon leads even when another game has far more units', () => {
+// HK's order: 30th Celebration first, then everything else by units alone.
+test('30th Celebration leads, then the rest run by stock whatever the game', () => {
   const d = bestbuyDigest({
     items: [
+      item('Pokemon TCG Prismatic Evolutions Booster Bundle', 300, { West: 300 }),
       item('2026 Topps Bowman Chrome Football Value Box', 9000, { West: 9000 }),
       item('One Piece Card Game OP-11 Booster Box', 5000, { West: 5000 }),
+      item('Pokemon TCG 30th Celebration Booster Bundle', 50, { West: 50 }),
       item('Pokemon TCG 30th Celebration Elite Trainer Box', 100, { West: 100 }),
     ],
     role: '<@&1>', checkerChannel: '<#2>',
   });
-  const at = (s) => d.text.indexOf(s);
-  assert.ok(at('30th Celebration ETB') < at('One Piece OP-11 Booster Box'));
-  assert.ok(at('One Piece OP-11 Booster Box') < at('Topps Bowman Chrome Football Value Box'));
+  const order = ['30th Celebration ETB', '30th Celebration Booster Bundle',
+    'Topps Bowman Chrome Football Value Box', 'One Piece OP-11 Booster Box', 'Prismatic Evolutions Booster Bundle'];
+  const at = order.map((s) => d.text.indexOf(s));
+  assert.ok(at.every((x) => x !== -1), at.join());
+  assert.deepEqual([...at].sort((a, b) => a - b), at, 'product shape inside 30th Celebration, stock after it');
+});
+
+test('the title carries the morning it posts', () => {
+  const args = { items: [item('Pokemon TCG Big Set Elite Trainer Box', 9, { West: 9 })], role: '<@&1>', checkerChannel: '<#2>' };
+  const nov18 = DateTime.fromISO('2026-11-18T07:00', { zone: 'America/New_York' });
+  assert.match(bestbuyDigest({ ...args, date: nov18 }).text, /^# BestBuy Instore Drops: November 18\n/);
+  // As Postgres hands back post_at: 7AM Eastern is noon UTC.
+  assert.match(bestbuyDigest({ ...args, date: new Date('2026-11-18T12:00:00Z') }).text, /^# BestBuy Instore Drops: November 18\n/);
+  assert.match(bestbuyDigest({ ...args, date: '2026-11-18' }).text, /^# BestBuy Instore Drops: November 18\n/);
+  assert.match(bestbuyDigest(args).text, /^# BestBuy Instore Drops\n/, 'no date, plain title');
 });
 
 test('inside a group the biggest restock leads', () => {

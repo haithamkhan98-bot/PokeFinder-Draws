@@ -76,9 +76,9 @@ const {
   // time over several minutes rather than in a burst, and unlike a queue drop
   // there is no deadline to race: the draw is already open and runs for days,
   // so waiting costs nothing and firing early splits one draw into two runs.
-  // Four minutes: the monitor now posts every listing in a draw within a
-  // couple of minutes of each other, so ten was only delaying the post.
-  TARGET_QUIET_PERIOD_MS = 240_000,
+  // Two and a half minutes: the monitor now posts every listing in a draw
+  // within a couple of minutes of each other, so ten was only delaying the post.
+  TARGET_QUIET_PERIOD_MS = 150_000,
   TARGET_TICK_MS = 300_000,
   REDDIT_ENABLED,
   // 'manual' drops each post in the alert channel formatted to paste.

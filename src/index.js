@@ -1044,8 +1044,8 @@ async function bestbuyPreview(message, raw) {
     }
 
     const naming = await nameItems(items.map((i, idx) => ({ ...i, pid: i.sku ?? String(idx) })));
-    const digest = bestbuyDigest({ items: naming.items, role, checkerChannel });
     const postAt = nextPostAt(DateTime.now());
+    const digest = bestbuyDigest({ items: naming.items, role, checkerChannel, date: postAt });
 
     if (!digest) {
       await message.reply(`Dry run from ${source}. Nothing postable, so no digest would be sent.`);

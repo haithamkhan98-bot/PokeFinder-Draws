@@ -92,20 +92,41 @@ test('BestBuy titles shorten to how a collector writes them', () => {
 const item = (rawTitle, units, regions, extra = {}) =>
   ({ rawTitle, units, states: 40, regions, priceDisplay: '$49.99', merch: false, ...extra });
 
-// Same priority as the draws and the queues: Pokemon leads whatever the
-// numbers say, then One Piece, Magic, sports, everything else.
-test('Pokemon leads even when another game has far more units', () => {
+// HK's order: Pokemon first (30th Celebration, then the rest by stock), then
+// each other game under its own heading, by stock.
+test('Pokemon leads, 30th Celebration first, and other games sit under their own headings', () => {
   const d = bestbuyDigest({
     items: [
+      item('Pokemon TCG Prismatic Evolutions Booster Bundle', 300, { West: 300 }),
+      item('Pokemon TCG Mega Evolution Elite Trainer Box', 800, { West: 800 }),
       item('2026 Topps Bowman Chrome Football Value Box', 9000, { West: 9000 }),
       item('One Piece Card Game OP-11 Booster Box', 5000, { West: 5000 }),
+      item('One Piece Card Game OP-12 Booster Box', 7000, { West: 7000 }),
+      item('Pokemon TCG 30th Celebration Booster Bundle', 50, { West: 50 }),
       item('Pokemon TCG 30th Celebration Elite Trainer Box', 100, { West: 100 }),
     ],
     role: '<@&1>', checkerChannel: '<#2>',
   });
-  const at = (s) => d.text.indexOf(s);
-  assert.ok(at('30th Celebration ETB') < at('One Piece OP-11 Booster Box'));
-  assert.ok(at('One Piece OP-11 Booster Box') < at('Topps Bowman Chrome Football Value Box'));
+  const order = ['30th Celebration ETB', '30th Celebration Booster Bundle',
+    'Mega Evolution ETB', 'Prismatic Evolutions Booster Bundle',
+    '**One Piece**', '**OP-12 Booster Box**', '**OP-11 Booster Box**',
+    '**Sports Cards**', 'Topps Bowman Chrome Football Value Box'];
+  const at = order.map((s) => d.text.indexOf(s));
+  assert.ok(at.every((x) => x !== -1), order.filter((_, n) => at[n] === -1).join(', '));
+  assert.deepEqual([...at].sort((a, b) => a - b), at);
+  // Pokemon carries no heading of its own.
+  assert.ok(!d.text.includes('**Pokemon**'));
+  assert.match(d.text, /\n\n\*\*One Piece\*\*\n• \*\*OP-12 Booster Box\*\*/);
+});
+
+test('the title carries the morning it posts', () => {
+  const args = { items: [item('Pokemon TCG Big Set Elite Trainer Box', 9, { West: 9 })], role: '<@&1>', checkerChannel: '<#2>' };
+  const nov18 = DateTime.fromISO('2026-11-18T07:00', { zone: 'America/New_York' });
+  assert.match(bestbuyDigest({ ...args, date: nov18 }).text, /^# BestBuy Instore Drops: November 18\n/);
+  // As Postgres hands back post_at: 7AM Eastern is noon UTC.
+  assert.match(bestbuyDigest({ ...args, date: new Date('2026-11-18T12:00:00Z') }).text, /^# BestBuy Instore Drops: November 18\n/);
+  assert.match(bestbuyDigest({ ...args, date: '2026-11-18' }).text, /^# BestBuy Instore Drops: November 18\n/);
+  assert.match(bestbuyDigest(args).text, /^# BestBuy Instore Drops\n/, 'no date, plain title');
 });
 
 test('inside a group the biggest restock leads', () => {

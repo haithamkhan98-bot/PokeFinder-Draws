@@ -35,7 +35,9 @@ export function startBestbuyScheduler(client, {
       // sets the way the draws do. nameItems falls back to local naming on
       // its own, so a naming outage costs ordering, never the post.
       const naming = await nameItems(run.items.map((i, idx) => ({ ...i, pid: i.sku ?? String(idx) })));
-      const digest = bestbuyDigest({ items: naming.items, role, checkerChannel });
+      const digest = bestbuyDigest({
+        items: naming.items, role, checkerChannel, date: run.post_at ? new Date(run.post_at) : run.post_date,
+      });
       if (!digest) {
         // Nothing postable, usually a night of merchandise only. Close the run
         // so it is not retried every minute for the rest of the day.

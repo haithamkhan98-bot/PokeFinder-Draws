@@ -2,7 +2,7 @@ import { DateTime } from 'luxon';
 import { openTargetRuns, targetRunSlots, completeTargetRun, targetRunItems } from './db.js';
 import { recheckTargetRun, summariseRecheck } from './target-recheck.js';
 import { runTargetRaffle } from './target-run.js';
-import { morningReminderAt } from './target-copy.js';
+import { nightReminderAt } from './target-copy.js';
 
 /**
  * How far ahead of a reminder its post is created.
@@ -29,6 +29,9 @@ export const LEAD_MS = 15 * 60_000;
 export async function tickTargetReminders({
   now = DateTime.now(), asDraft = true, alert = null,
   discordChannelId = null, discordRole = '@PokeFinder+', reddit = false,
+  // Where a manual run's member posts go when the automatic path is still in
+  // drafts and so passes no channel.
+  manualDiscordChannelId = null,
   // Injected so the ticker can be tested without a database or a Buffer
   // account. Every one of these either reads the run store or posts, and both
   // are things a test needs to stand in for.
@@ -50,15 +53,27 @@ export async function tickTargetReminders({
 
     const posted = await listSlots(run.id);
     const due = [];
-    const morning = morningReminderAt(DateTime.fromJSDate(new Date(run.opened_at)), closesAt);
-    if (morning && !posted.has('morning') && now >= morning.minus(LEAD_MS)) due.push('morning');
+    const openedAt = DateTime.fromJSDate(new Date(run.opened_at));
+    const night = nightReminderAt(openedAt, closesAt);
+    // A run announced before the switch to the night reminder may already
+    // have its old 9AM 'morning' post. That counts: one in-between reminder
+    // per draw, never two.
+    if (night && !posted.has('night') && !posted.has('morning') && now >= night.minus(LEAD_MS)) {
+      due.push('night');
+    }
     const closing = closesAt.minus({ hours: 1 });
     if (!posted.has('closing') && now >= closing.minus(LEAD_MS)) due.push('closing');
     if (!due.length) continue;
 
     // Re-check first. A reminder listing items Target has pulled sends people
     // to a page they cannot enter, which is worse than a late reminder.
-    const checked = await recheck(run.id);
+    //
+    // Not on a run HK started by hand. He named those items himself, and the
+    // re-check reads Target's queue flag, which a draw the monitor never saw
+    // may not carry: one unreadable page there would silently drop an item
+    // he asked to be posted.
+    const checked = run.manual ? { checked: 0, removed: [], unreadable: [], errors: ['manual draw, listings not re-checked'] }
+      : await recheck(run.id);
     const left = await listItems(run.id);
     if (!left.length) {
       await complete(run.id, 'every listing was pulled');
@@ -72,10 +87,14 @@ export async function tickTargetReminders({
     // nobody can enter, so passing null makes the run build a fresh one.
     const picture = checked.removed.length ? null : run.image_url;
 
+    // A draw HK started by hand with !targetdraw is live whatever
+    // TARGET_LIVE says: he asked for it to post, so its reminders post too.
+    const live = Boolean(run.manual) || !asDraft;
     const report = await runRaffle({
-      runId: run.id, now, closesAt, imageUrl: picture,
-      asDraft, publishLive: false, slots: new Set(due),
-      discordChannelId, discordRole, reddit,
+      runId: run.id, now, openedAt, closesAt, imageUrl: picture,
+      asDraft: !live, publishLive: false, slots: new Set(due),
+      discordChannelId: live ? (discordChannelId ?? manualDiscordChannelId) : discordChannelId,
+      discordRole, reddit, keepNames: Boolean(run.manual),
     });
     done.push({ runId: run.id, action: 'reminded', slots: due, checked, report });
 

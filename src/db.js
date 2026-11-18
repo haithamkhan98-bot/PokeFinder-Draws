@@ -583,22 +583,71 @@ export async function targetCloseTimeFor(tcins) {
  * surprise, two genuinely separate draws open at once, into failed inserts and
  * lost items. Picking the newest open run degrades instead.
  */
-export async function openTargetRun() {
+export async function openTargetRun({ closesAt = null } = {}) {
+  // Automatic runs only. A monitor detected item joining a draw HK started
+  // by hand would put a product he did not name into his posts.
+  //
+  // Matched on the close time when there is one. The embeds carry it now, so
+  // two draws open at once with different deadlines stay two runs rather than
+  // the second quietly joining the first.
+  const { rows } = closesAt
+    ? await pool.query(
+      `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+         FROM target_runs WHERE completed_at IS NULL AND NOT manual AND closes_at = $1
+        ORDER BY opened_at DESC LIMIT 1`,
+      [closesAt],
+    )
+    : await pool.query(
+      `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+         FROM target_runs WHERE completed_at IS NULL AND NOT manual
+        ORDER BY opened_at DESC LIMIT 1`,
+    );
+  return rows[0] ?? null;
+}
+
+export async function startTargetRun({ closesAt = null, manual = false } = {}) {
   const { rows } = await pool.query(
-    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
-       FROM target_runs WHERE completed_at IS NULL
-      ORDER BY opened_at DESC LIMIT 1`,
+    `INSERT INTO target_runs (closes_at, manual) VALUES ($1, $2)
+       RETURNING id, status, opened_at, closes_at, manual`,
+    [closesAt, manual],
+  );
+  return rows[0];
+}
+
+/**
+ * The most recent row for a TCIN in any run, for a draw HK starts by hand.
+ * The monitor has usually seen the item before, and that row has its title,
+ * its photo and the link he set on the monitor.
+ */
+export async function lastSeenTargetItem(tcin) {
+  const { rows } = await pool.query(
+    `SELECT tcin, raw_title, product_name, set_name, link, affiliate, image_url, classification
+       FROM target_items WHERE tcin = $1 ORDER BY seen_at DESC LIMIT 1`,
+    [String(tcin)],
   );
   return rows[0] ?? null;
 }
 
-export async function startTargetRun({ closesAt = null } = {}) {
+/** TCINs in any open !targetdraw run, which the monitor path leaves alone. */
+export async function openManualTcins() {
   const { rows } = await pool.query(
-    `INSERT INTO target_runs (closes_at) VALUES ($1)
-       RETURNING id, status, opened_at, closes_at`,
-    [closesAt],
+    `SELECT DISTINCT i.tcin FROM target_items i JOIN target_runs r ON r.id = i.run_id
+      WHERE r.completed_at IS NULL AND r.manual AND i.removed_at IS NULL`,
   );
-  return rows[0];
+  return new Set(rows.map((r) => r.tcin));
+}
+
+/** Open automatic runs holding any of these TCINs, so a manual draw can supersede them. */
+export async function openAutoRunsWith(tcins) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT r.id, r.announced_at, r.closes_at
+       FROM target_runs r JOIN target_items i ON i.run_id = r.id
+      WHERE r.completed_at IS NULL AND NOT r.manual
+        AND i.removed_at IS NULL AND i.tcin = ANY($1::text[])
+      ORDER BY r.id`,
+    [tcins.map(String)],
+  );
+  return rows;
 }
 
 /**
@@ -693,7 +742,7 @@ export async function recordTargetPost({ runId, slot, channelId, bufferPostId })
 /** Every run still open, oldest first, for the reminder ticker. */
 export async function openTargetRuns() {
   const { rows } = await pool.query(
-    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at, manual
        FROM target_runs WHERE completed_at IS NULL ORDER BY opened_at`,
   );
   return rows;

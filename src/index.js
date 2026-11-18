@@ -40,6 +40,7 @@ import { tickReddit, queueRedditSet, summariseReddit } from './reddit-run.js';
 import { latestRedditPost, getSecret, setSecret } from './db.js';
 import {
   loadAffiliateLinks, summariseSheet, forgetSheet, missingLinksAlert, missingFingerprint, splitAlert, conflictAlert,
+  loadTargetLinks,
 } from './sheet.js';
 
 // Alerted once per process, not once per drop. A broken sheet URL would
@@ -47,6 +48,14 @@ import {
 let sheetWarned = false;
 import { drawRedditPosts, queueRedditPosts, DRAW_SUBS, QUEUE_SUBS } from './reddit-copy.js';
 import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setTargetRunCloseTime } from './db.js';
+import { lastSeenTargetItem, openAutoRunsWith, completeTargetRun, openManualTcins } from './db.js';
+import {
+  parseDrawCommand, resolveDrawItems, unresolved, describeItems, fmt as fmtClose, USAGE as DRAW_USAGE,
+  closeFromEmbeds,
+} from './target-manual.js';
+import { embedListing } from './target-raffle.js';
+import { buildTargetGrid } from './target-run.js';
+import { buildRafflePosts } from './target-copy.js';
 
 const {
   DISCORD_TOKEN,
@@ -67,7 +76,9 @@ const {
   // time over several minutes rather than in a burst, and unlike a queue drop
   // there is no deadline to race: the draw is already open and runs for days,
   // so waiting costs nothing and firing early splits one draw into two runs.
-  TARGET_QUIET_PERIOD_MS = 600_000,
+  // Two and a half minutes: the monitor now posts every listing in a draw
+  // within a couple of minutes of each other, so ten was only delaying the post.
+  TARGET_QUIET_PERIOD_MS = 150_000,
   TARGET_TICK_MS = 300_000,
   REDDIT_ENABLED,
   // 'manual' drops each post in the alert channel formatted to paste.
@@ -452,7 +463,10 @@ const batcher = new Batcher({
 const targetBatcher = new Batcher({
   quietMs: Number(TARGET_QUIET_PERIOD_MS),
   ceilingMs: Number(CEILING_MS),
-  keyOf: () => 'target',
+  // Keyed on the draw's close time, now that the embeds carry it. Listings
+  // closing together are one draw; a second draw with another deadline gets
+  // its own run instead of arriving "late" to the first and being dropped.
+  keyOf: (item) => (item.closesAt ? `closes:${item.closesAt.toMillis()}` : 'target'),
   onLate: async ({ item }) => {
     // Not a problem here, unlike the queue. A Target draw stays open, so a
     // late listing joins the run and shows up in the next reminder.
@@ -461,21 +475,51 @@ const targetBatcher = new Batcher({
   },
   onFire: async ({ items, reason }) => {
     try {
-      const usable = usableRaffleItems(items);
+      // Anything HK already posted with !targetdraw stays with his run. The
+      // monitor picking it up afterwards would announce it a second time.
+      const manual = await openManualTcins();
+      const handled = items.filter((i) => manual.has(String(i.tcin)));
+      if (handled.length) {
+        console.log(`target: ${handled.length} listing(s) already in a !targetdraw run, skipped: `
+          + handled.map((i) => i.tcin).join(', '));
+      }
+      const usable = usableRaffleItems(items.filter((i) => !manual.has(String(i.tcin))));
       const dropped = items.filter((i) => i.classification === 'excluded');
+      if (!usable.length && handled.length && !dropped.length) return;
       if (!usable.length) {
         await alert(`Target raffle fired on ${reason} with nothing postable.`
           + (dropped.length ? ` ${dropped.length} excluded: ${dropped.map((i) => i.rawTitle).join('; ')}` : ''));
         return;
       }
 
-      let run = await openTargetRun();
+      // The embed's Drawing Date. One batch is keyed on one close time, so
+      // the listings agree; the earliest is taken in case a batch keyed
+      // 'target' (no date) is mixed with dated ones.
+      const embedClose = usable.map((i) => i.closesAt).filter(Boolean)
+        .sort((a, b) => a.toMillis() - b.toMillis())[0] ?? null;
+
+      // The Target tab of the sheet backs up the monitor's link. HK sets that
+      // by hand, so a listing he has not got to yet still earns if the sheet
+      // has it.
+      if (process.env.TARGET_SHEET_CSV && usable.some((i) => !i.affiliate)) {
+        try {
+          const sheet = await loadTargetLinks();
+          for (const i of usable) {
+            const row = i.affiliate ? null : sheet?.get(String(i.tcin).replace(/\D/g, ''));
+            if (row?.affiliate) Object.assign(i, { link: row.affiliate, affiliate: true });
+          }
+        } catch (err) {
+          console.error(`target sheet unreadable, using the monitor links: ${err.message}`);
+        }
+      }
+
+      let run = await openTargetRun({ closesAt: embedClose ? embedClose.toJSDate() : null });
       const joining = Boolean(run);
-      if (!run) run = await startTargetRun({});
+      if (!run) run = await startTargetRun({ closesAt: embedClose ? embedClose.toJSDate() : null });
       const added = await addTargetItems(run.id, usable);
 
-      // The close time may already be known from an earlier bookmarklet click
-      // on any listing in this draw.
+      // No Drawing Date on the embed: fall back to a bookmarklet click on any
+      // listing in this draw.
       if (!run.closes_at) {
         const found = await targetCloseTimeFor(usable.map((i) => i.tcin));
         if (found) {
@@ -518,8 +562,8 @@ const targetBatcher = new Batcher({
         + `Headline: ${report.headline}\n`
         + `Listings: ${report.items}`
         + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')
-        + `\nCloses: ${closesAt ? closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') + ' ET' : 'UNKNOWN. Click the bookmarklet on any listing to set it, or the two reminders cannot be scheduled.'}`
-        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} from the monitor`
+        + `\nCloses: ${closesAt ? closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') + ' ET' + (embedClose ? ' (from the embed)' : ' (from the bookmarklet)') : 'UNKNOWN. The embeds had no Drawing Date. Click the bookmarklet on any listing to set it, or the reminders cannot be scheduled.'}`
+        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} from the monitor or sheet`
         + (report.affiliate.covered < report.affiliate.total ? ', the rest fall back to plain PokeFinder links' : '')
         + `\nPosts:\n${summariseTarget(report)}`,
       );
@@ -1529,16 +1573,18 @@ async function targetPasteBlocks() {
 
   const naming = await nameItems(usable);
   const named = orderedItems(naming.items.map((i, idx) => ({ ...usable[idx], ...i })));
-  const closes = await targetCloseTimeFor(named.map((i) => i.tcin));
-  if (!closes) {
+  // The embed's Drawing Date first, the bookmarklet only when there is none.
+  const embedClose = named.map((i) => i.closesAt).filter(Boolean)
+    .sort((a, b) => a.toMillis() - b.toMillis())[0] ?? null;
+  const closes = embedClose ? null : await targetCloseTimeFor(named.map((i) => i.tcin));
+  if (!embedClose && !closes) {
     return {
       error: `Found ${named.length} raffle listing(s) but no close time for any of them. `
-        + 'Both the member and Reddit posts are built around the countdown, so click the '
-        + 'bookmarklet on one listing first.',
+        + 'The embeds had no Drawing Date, so click the bookmarklet on one listing first.',
     };
   }
 
-  const closesAt = DateTime.fromJSDate(new Date(closes.closes_at));
+  const closesAt = embedClose ?? DateTime.fromJSDate(new Date(closes.closes_at));
   const now = DateTime.now();
   const et = (d) => d.setZone('America/New_York').toFormat('ccc LLL d, h:mma');
 
@@ -1571,6 +1617,164 @@ async function targetPasteBlocks() {
 }
 
 /** `!targetpost` prints those blocks on demand. */
+/**
+ * The monitor's recent Target embeds, by TCIN, for `!targetdraw` to borrow a
+ * title, photo and link from. Raffle and restock embeds alike.
+ */
+async function recentTargetListings(limit = 100) {
+  const found = new Map();
+  if (!TARGET_CHANNEL_ID) return found;
+  try {
+    const channel = await client.channels.fetch(TARGET_CHANNEL_ID);
+    if (!channel?.isTextBased?.()) return found;
+    const fetched = await channel.messages.fetch({ limit });
+    // Oldest first, so the newest embed for a TCIN wins.
+    for (const m of [...fetched.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp)) {
+      for (const embed of m.embeds ?? []) {
+        const l = embedListing(embed);
+        if (l) found.set(l.tcin, { ...found.get(l.tcin), ...Object.fromEntries(Object.entries(l).filter(([, v]) => v)) });
+      }
+    }
+  } catch (err) {
+    console.error(`could not read the Target channel for !targetdraw: ${err.message}`);
+  }
+  return found;
+}
+
+/**
+ * Parse and resolve a `!targetdraw` body, naming anything that only has a raw
+ * title. Shared by the live command and the preview so they cannot disagree.
+ */
+async function prepareTargetDraw(body) {
+  const now = DateTime.now();
+  const parsed = parseDrawCommand(body, { now });
+  if (!parsed.ok) return { error: parsed.errors.join('\n') };
+
+  let sheet = null;
+  let sheetNote = null;
+  if (process.env.TARGET_SHEET_CSV) {
+    try { sheet = await loadTargetLinks(); } catch (err) { sheetNote = `Target sheet unreadable: ${err.message}`; }
+  } else {
+    sheetNote = 'TARGET_SHEET_CSV is not set, so nothing came from the sheet.';
+  }
+
+  const items = await resolveDrawItems(parsed.items, {
+    sheet,
+    lastSeen: (tcin) => lastSeenTargetItem(tcin).catch(() => null),
+    embeds: await recentTargetListings(),
+    probe: (tcin) => probeListing(tcin),
+  });
+
+  const missing = unresolved(items);
+  if (missing.length) {
+    return {
+      error: `I could not find a name for ${missing.map((i) => `\`${i.tcin}\``).join(', ')} in the sheet, `
+        + 'the monitor history or on Target. Put the name after the TCIN on its line and send it again.',
+    };
+  }
+
+  // Raw titles only. Anything HK or the sheet named keeps its name.
+  const raw = items.filter((i) => i.needsNaming);
+  if (raw.length) {
+    const naming = await nameItems(raw.map((i) => ({ ...i, postName: null })));
+    naming.items.forEach((n, idx) => {
+      Object.assign(raw[idx], {
+        postName: n.postName ?? raw[idx].rawTitle, productName: n.postName ?? raw[idx].rawTitle,
+        set: n.set ?? null, needsNaming: false,
+      });
+      raw[idx].sources.name = `Target title, named by the ${naming.source}`;
+    });
+  }
+
+  let { closesAt } = parsed;
+  let closeNote = null;
+  if (!closesAt) {
+    const fromEmbeds = closeFromEmbeds(items, { now });
+    if (!fromEmbeds.ok) return { error: `Close time: ${fromEmbeds.reason}` };
+    closesAt = fromEmbeds.closesAt;
+    closeNote = 'Close time read from the monitor\'s Drawing Date.';
+  }
+
+  return { now, closesAt, items: orderedItems(items), sheetNote: [closeNote, sheetNote].filter(Boolean).join('\n') || null };
+}
+
+/**
+ * `!targetdraw <close>` then one item per line: post a Target draw HK names.
+ *
+ * Live from the first post, whatever TARGET_LIVE says: he is asking for it to
+ * go out. The announcement goes to both X accounts and the member Discord now,
+ * a 10PM reminder the night before on X, and the hour warning on X and Discord.
+ */
+async function targetDraw(message, body, { preview = false } = {}) {
+  try {
+    const prep = await prepareTargetDraw(body);
+    if (prep.error) { await message.reply(prep.error.slice(0, 1900)); return; }
+    const { now, closesAt, items, sheetNote } = prep;
+
+    // An automatic run already holding these items would post them a second
+    // time. One still in drafts is simply taken over. One already live is
+    // left alone, and so is this command, so nothing goes out twice.
+    const overlapping = await openAutoRunsWith(items.map((i) => i.tcin));
+    const liveOverlap = flag(TARGET_LIVE) ? overlapping.filter((r) => r.announced_at) : [];
+    const overlapNote = overlapping.length
+      ? (liveOverlap.length
+        ? `**Stopped:** automatic run(s) ${liveOverlap.map((r) => `#${r.id}`).join(', ')} already posted some of these live, `
+          + 'and their reminders are already scheduled. Nothing was sent.'
+        : `Automatic run(s) ${overlapping.map((r) => `#${r.id}`).join(', ')} hold some of these items and will be closed `
+          + 'so this draw is the only one posting them.')
+      : null;
+
+    const posts = buildRafflePosts({ items, now, closesAt, openedAt: now });
+    const head = [
+      `**Target draw${preview ? ' preview, nothing sent' : ''}**, closes ${fmtClose(closesAt)}`,
+      describeItems(items),
+      sheetNote,
+      overlapNote,
+    ].filter(Boolean).join('\n');
+
+    if (preview) {
+      let grid = null;
+      try { grid = await buildTargetGrid(items); } catch (err) { grid = { error: err.message }; }
+      const schedule = posts.map((p) => `  X ${p.slot.padEnd(8)} ${p.dueAt ? fmtClose(p.dueAt) : 'immediately'}`
+        + (p.discord ? ' + Discord' : ''));
+      await message.reply(`${head}\n\`\`\`\n${schedule.join('\n')}\n\`\`\``
+        + (grid?.url ? `\nGrid: ${grid.url}${grid.omitted?.length ? ` (left out: ${grid.omitted.join('; ')})` : ''}`
+          : `\nGrid not built: ${grid?.error}`));
+      await alertBlock('X announcement', posts[0].text);
+      const dp = targetDiscordPosts({ items, now, closesAt, role: ROLE_MENTION });
+      if (dp[0]) await alertBlock('Discord announcement', dp[0].text);
+      await message.channel.send('Send the same text as `!targetdraw` to post it.');
+      return;
+    }
+
+    if (liveOverlap.length) { await message.reply(head.slice(0, 1900)); return; }
+    if (!DISCORD_MEMBER_CHANNEL_ID) {
+      await message.reply('DISCORD_MEMBER_CHANNEL_ID is not set, so the Discord posts would have nowhere to go. Nothing was sent.');
+      return;
+    }
+
+    for (const r of overlapping) await completeTargetRun(r.id, 'superseded by a !targetdraw run');
+
+    const run = await startTargetRun({ closesAt: closesAt.toJSDate(), manual: true });
+    await addTargetItems(run.id, items.map((i) => ({ ...i, productName: i.postName })));
+    await message.reply(`${head}\n\nPosting as run #${run.id}...`.slice(0, 1900));
+
+    const report = await runTargetRaffle({
+      runId: run.id, now, openedAt: now, closesAt,
+      asDraft: false, publishLive: true, keepNames: true,
+      discordChannelId: DISCORD_MEMBER_CHANNEL_ID,
+      discordRole: ROLE_MENTION,
+      reddit: flag(REDDIT_ENABLED),
+    });
+    await message.channel.send(
+      `**Target draw #${run.id} ${report.posts.some((p) => p.slot === 'live') ? 'posted' : 'NOT posted'}**: ${report.headline}\n`
+      + `\`\`\`\n${summariseTarget(report)}\n\`\`\``.slice(0, 1900),
+    );
+  } catch (err) {
+    await message.reply(`Target draw failed: ${err.message}`.slice(0, 1900));
+  }
+}
+
 async function targetPost(message) {
   try {
     const built = await targetPasteBlocks();
@@ -1818,6 +2022,16 @@ client.on(Events.MessageCreate, async (message) => {
 
     if (/^!targetpost$/i.test(content)) { await targetPost(message); return; }
 
+    // Before !targetdraw, which is a prefix of it.
+    const tdrawPreview = content.match(/^!targetdrawpreview\b([\s\S]*)$/i);
+    if (tdrawPreview) { await targetDraw(message, tdrawPreview[1], { preview: true }); return; }
+    const tdraw = content.match(/^!targetdraw\b([\s\S]*)$/i);
+    if (tdraw) {
+      if (!tdraw[1].trim()) { await message.reply(DRAW_USAGE); return; }
+      await targetDraw(message, tdraw[1]);
+      return;
+    }
+
     const tscan = content.match(/^!targetscan(?:\s+(\d+))?$/i);
     if (tscan) { await targetScan(message, tscan[1]); return; }
 
@@ -2024,6 +2238,7 @@ function startTargetTicker() {
       const did = await tickTargetReminders({
         asDraft: !flag(TARGET_LIVE),
         discordChannelId: flag(TARGET_LIVE) ? (DISCORD_MEMBER_CHANNEL_ID ?? null) : null,
+        manualDiscordChannelId: DISCORD_MEMBER_CHANNEL_ID ?? null,
         discordRole: DISCORD_MEMBER_ROLE_ID ? `<@&${DISCORD_MEMBER_ROLE_ID}>` : '@PokeFinder+',
         reddit: flag(REDDIT_ENABLED),
         alert,
@@ -2240,12 +2455,17 @@ client.once(Events.ClientReady, (c) => {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }
   if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID) {
-    console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}`);
-    startTargetTicker();
-    console.log(`target reminders are checked every ${Number(TARGET_TICK_MS) / 1000}s, built ${LEAD_MS / 60_000}min ahead`);
+    console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}, `
+      + `firing ${Number(TARGET_QUIET_PERIOD_MS) / 60_000}min after the last listing`);
   } else {
-    console.log('target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
+    console.log('automatic target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
   }
+  // Always, because a !targetdraw run needs its reminders whether or not the
+  // monitor path is on. With no open runs a tick is one empty query.
+  startTargetTicker();
+  console.log(`target reminders are checked every ${Number(TARGET_TICK_MS) / 1000}s, built ${LEAD_MS / 60_000}min ahead, `
+    + `!targetdraw is ${DISCORD_MEMBER_CHANNEL_ID ? 'ready' : 'missing DISCORD_MEMBER_CHANNEL_ID'}`
+    + `${process.env.TARGET_SHEET_CSV ? '' : ', TARGET_SHEET_CSV not set'}`);
   if (flag(REDDIT_ENABLED)) {
     startRedditTicker();
     console.log(`reddit is ON in ${REDDIT_MODE === 'api' ? 'API' : 'MANUAL (paste ready to the alert channel)'} mode, `

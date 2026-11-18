@@ -1,5 +1,7 @@
 import { orderedItems, orderedSets, joinEnglish, timeLabel } from './copy.js';
 
+const ET = 'America/New_York';
+
 /**
  * Copy for Target raffles.
  *
@@ -16,9 +18,74 @@ const BOOKMARK = "Bookmark & Follow! We'll post every Target draw as soon as it 
 const TAGS = '#Pokemon #ad';
 
 /** Sets present, 30th Celebration first, as a readable phrase. */
-export function raffleHeadline(items) {
+export function setHeadline(items) {
   const sets = [...new Set(items.map((i) => i.set).filter(Boolean))];
   return sets.length ? joinEnglish(orderedSets(sets)) : 'Pokemon';
+}
+
+/**
+ * Past this the product names stop reading as a headline and the tweet runs
+ * out of room for the list, so the set names take over.
+ */
+export const HEADLINE_MAX = 120;
+const HEADLINE_MAX_PRODUCTS = 3;
+
+/**
+ * The products themselves, as HK writes them by hand:
+ * "30th Celebration Ultra-Premium Collection Day and Night and Ditto Premium
+ * Collection".
+ *
+ * Variants sold as separate listings ("... - Day", "... - Night") fold into
+ * one product with their variants joined, and the set name is said once
+ * rather than in front of every product. Null when there are too many
+ * products to name, or the result would be too long to lead a tweet.
+ */
+export function productHeadline(items) {
+  const names = orderedItems(items).map((i) => ({
+    name: String(i.postName ?? i.productName ?? i.rawTitle ?? '').trim(),
+    set: i.set ?? null,
+  }));
+  if (!names.length || names.some((n) => !n.name)) return null;
+
+  // Two ways a variant shows up: "Ultra-Premium Collection - Day" from the
+  // naming step, and "Ultra Premium Collection Day" from the sheet. The
+  // second only counts as a variant when another item shares everything but
+  // the last word, so "Ditto Premium Collection" is not split into
+  // "Ditto Premium" and "Collection".
+  const lastWordBase = (n) => n.replace(/\s+\S+$/, '');
+  const split = (n) => {
+    const dash = n.match(/^(.*\S)\s*-\s+(.+)$/);
+    if (dash) return { base: dash[1], variant: dash[2] };
+    const base = lastWordBase(n);
+    const shared = base !== n && names.filter((x) => lastWordBase(x.name) === base).length > 1;
+    return shared ? { base, variant: n.slice(base.length).trim() } : { base: n, variant: null };
+  };
+
+  const groups = [];
+  for (const { name, set } of names) {
+    const { base, variant } = split(name);
+    let g = groups.find((x) => x.base === base);
+    if (!g) groups.push(g = { base, set, variants: [] });
+    if (variant && !g.variants.includes(variant)) g.variants.push(variant);
+  }
+  if (!groups.length || groups.length > HEADLINE_MAX_PRODUCTS) return null;
+
+  const said = new Set();
+  const labels = groups.map((g) => {
+    let label = g.base;
+    if (g.set && said.has(g.set) && label.toLowerCase().startsWith(`${g.set.toLowerCase()} `)) {
+      label = label.slice(g.set.length + 1);
+    }
+    if (g.set) said.add(g.set);
+    return g.variants.length ? `${label} ${g.variants.join(' and ')}` : label;
+  });
+  const out = labels.join(' and ');
+  return out.length > HEADLINE_MAX ? null : out;
+}
+
+/** Product names when they fit, else the sets. */
+export function raffleHeadline(items) {
+  return productHeadline(items) ?? setHeadline(items);
 }
 
 /**
@@ -54,22 +121,30 @@ export function raffleItemLines(items) {
 const body = (...blocks) => blocks.filter(Boolean).join('\n\n');
 
 /**
- * 9AM the morning after a draw opens, or null when that is not a sensible
- * moment to say anything.
+ * 10PM Eastern on the evening before the close, or null when that is not a
+ * sensible moment to say anything.
  *
- * Skipped when it lands after the close, or inside the final hour, since the
- * closing post already covers that stretch and two posts minutes apart read
- * as one message sent twice.
+ * The evening before rather than the morning after the draw opens: the
+ * morning after can be days from the close, and the reminder that moves
+ * people is the one that says "tomorrow". HK picked 10PM.
+ *
+ * Skipped when it lands within three hours of the announcement (a reminder
+ * that soon repeats the post people just saw), or within two hours of the
+ * close, since the closing post covers that stretch and two posts close
+ * together read as one message sent twice.
  *
  * Exported so the ticker and the copy agree on when it is. Two separate
  * calculations would drift, and the symptom would be a reminder that is never
  * built or one built twice.
  */
-export function morningReminderAt(openedAt, closesAt) {
+export const NIGHT_HOUR = 22;
+export function nightReminderAt(openedAt, closesAt) {
   if (!closesAt) return null;
-  const morning = openedAt.setZone('America/New_York').plus({ days: 1 })
-    .set({ hour: 9, minute: 0, second: 0, millisecond: 0 });
-  return morning < closesAt.minus({ hours: 1 }) ? morning : null;
+  const night = closesAt.setZone(ET).minus({ days: 1 })
+    .set({ hour: NIGHT_HOUR, minute: 0, second: 0, millisecond: 0 });
+  if (openedAt && night < openedAt.plus({ hours: 3 })) return null;
+  if (night >= closesAt.minus({ hours: 2 })) return null;
+  return night;
 }
 
 /**
@@ -80,10 +155,14 @@ export function morningReminderAt(openedAt, closesAt) {
  * goes out; the two reminders are simply not scheduled, which is the right
  * failure: being late to announce costs more than missing a reminder.
  *
- * The morning reminder is skipped when 9AM lands after the close, or inside
- * the final hour, since the closing post already covers that stretch.
+ * The night reminder is skipped when it would land too close to either the
+ * announcement or the closing post (see nightReminderAt).
+ *
+ * `openedAt` is when the draw was announced. The ticker builds reminders days
+ * later, and timing them from the tick rather than the announcement would
+ * move them.
  */
-export function buildRafflePosts({ items, now, closesAt = null }) {
+export function buildRafflePosts({ items, now, closesAt = null, openedAt = now }) {
   const headline = raffleHeadline(items);
   const list = raffleItemLines(items);
   const posts = [];
@@ -100,11 +179,11 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
 
   if (!closesAt) return posts;
 
-  const morning = morningReminderAt(now, closesAt);
-  if (morning) {
+  const night = nightReminderAt(openedAt, closesAt);
+  if (night) {
     posts.push({
-      slot: 'morning',
-      dueAt: morning,
+      slot: 'night',
+      dueAt: night,
       discord: false,
       text: body(
         `💫 Reminder: The Target ${headline} Draws Are Still Open! ${deadlineClause(closesAt)}`,
@@ -130,7 +209,7 @@ export function buildRafflePosts({ items, now, closesAt = null }) {
  * The two member facing Discord posts for a Target raffle.
  *
  * Live and closing only, matching the `discord` flags on the beats above. The
- * morning reminder is deliberately not one: members already got the
+ * night reminder is deliberately not one: members already got the
  * announcement and will get the hour warning, and a third ping on a draw they
  * have had a day to enter is what makes people mute a role.
  *

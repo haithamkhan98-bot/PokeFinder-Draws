@@ -69,6 +69,33 @@ export function nearTermTimes(html, { now = Date.now(), days = 60 } = {}) {
   return hits.filter((x) => !seen.has(x.value) && seen.add(x.value)).slice(0, 12);
 }
 
+/**
+ * The listing's main product photo, from its og:image tag.
+ *
+ * Only needed for a draw HK starts by hand: the monitor's embeds carry a
+ * thumbnail, but an item he names that the monitor never posted has no photo
+ * anywhere else, and the grid needs one.
+ */
+export function readOgImage(html) {
+  const h = String(html ?? '');
+  const m = h.match(/<meta[^>]+property=["']og:image["'][^>]*content=["']([^"']+)["']/i)
+    ?? h.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+  if (!m) return null;
+  const url = m[1].replace(/&amp;/g, '&').trim();
+  return /^https:\/\//i.test(url) ? url : null;
+}
+
+/** The page's own product title, from og:title, without Target's suffix. */
+export function readOgTitle(html) {
+  const h = String(html ?? '');
+  const m = h.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["']/i)
+    ?? h.match(/<meta[^>]+content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
+  if (!m) return null;
+  const t = m[1].replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"')
+    .replace(/\s*:\s*Target\s*$/i, '').trim();
+  return t || null;
+}
+
 const WALL = [
   /press\s*&(amp;)?\s*hold/i, /px-captcha/i, /perimeterx/i, /_px\w*Captcha/i,
   /access\s+denied/i, /unusual\s+traffic/i, /are\s+you\s+a\s+human/i,
@@ -110,13 +137,15 @@ export async function probeListing(tcin, { fetchImpl = fetch, timeoutMs = 15_000
       queueGated: readQueueGated(html),
       walled: looksWalled(html),
       times: nearTermTimes(html),
+      image: readOgImage(html),
+      title: readOgTitle(html),
       error: null,
     };
   } catch (err) {
     return {
       tcin: String(tcin), url, ok: false, status: null,
       ms: Date.now() - started, bytes: 0, finalUrl: url,
-      hasNextData: false, queueGated: null, walled: false, times: [],
+      hasNextData: false, queueGated: null, walled: false, times: [], image: null, title: null,
       error: err.name === 'AbortError' ? `timed out after ${timeoutMs}ms` : err.message,
     };
   } finally {

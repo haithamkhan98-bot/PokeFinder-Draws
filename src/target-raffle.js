@@ -76,6 +76,25 @@ export function parseTargetRaffle(embed, { now = DateTime.now() } = {}) {
   };
 }
 
+/**
+ * What any Target monitor embed says about its listing, raffle or not.
+ *
+ * For `!targetdraw`, which wants a title, a photo and HK's monitor link for an
+ * item he names. A restock embed for the same TCIN carries all three just as
+ * well as a raffle one does.
+ */
+export function embedListing(embed) {
+  if ((embed?.author?.name ?? '').trim() !== TARGET_AUTHOR) return null;
+  const tcin = String(field(embed, 'Tcin') ?? '').trim();
+  if (!tcin) return null;
+  return {
+    tcin,
+    rawTitle: String(embed?.title ?? '').trim() || null,
+    link: embed?.url ?? null,
+    image: embed?.thumbnail?.url ?? embed?.image?.url ?? null,
+  };
+}
+
 /** Raffle items, excluding anything the draw path would not post. */
 export function usableRaffleItems(items) {
   return items.filter((i) => i.classification !== 'excluded');

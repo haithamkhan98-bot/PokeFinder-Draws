@@ -247,6 +247,11 @@ CREATE TABLE IF NOT EXISTS target_posts (
   UNIQUE (run_id, slot, channel_id)
 );
 
+-- A run HK started with !targetdraw rather than one the monitor opened. Those
+-- post live whatever TARGET_LIVE says, keep the names he gave, skip the
+-- listing re-check, and are never joined by monitor detected items.
+ALTER TABLE target_runs ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS target_runs_open_idx
   ON target_runs(opened_at DESC) WHERE completed_at IS NULL;
 CREATE INDEX IF NOT EXISTS target_items_run_idx ON target_items(run_id);

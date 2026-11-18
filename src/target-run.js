@@ -25,20 +25,30 @@ import { imageUrl as storedImageUrl } from './server.js';
  * what most people read before the text.
  */
 export async function buildTargetGrid(items) {
+  // An item with no photo, or one whose photo will not load, is left out of
+  // the picture rather than costing the whole picture. The text still lists
+  // it, and a grid of two out of three beats no grid at all.
   const withPhotos = [];
+  const omitted = [];
   for (const it of items) {
     const src = it.image ?? it.imageUrl ?? null;
-    if (!src) throw new Error(`${it.tcin ?? it.pid} has no product photo`);
-    const { buffer } = await fetchAndTrim(src);
-    withPhotos.push({ ...it, buffer });
+    const name = it.postName ?? it.productName ?? it.tcin ?? it.pid;
+    if (!src) { omitted.push(`${name}: no photo`); continue; }
+    try {
+      const { buffer } = await fetchAndTrim(src);
+      withPhotos.push({ ...it, buffer });
+    } catch (err) {
+      omitted.push(`${name}: ${err.message}`);
+    }
   }
+  if (!withPhotos.length) throw new Error(`no item has a usable photo (${omitted.join('; ')})`);
   const grid = await buildGrid(withPhotos);
   const id = await storeImage(grid.buffer, {
     kind: 'target', mime: 'image/png', width: grid.width, height: grid.height,
   });
   return {
     url: storedImageUrl(id), width: grid.width, height: grid.height,
-    bytes: grid.buffer.length, layout: grid.counts.join('+'),
+    bytes: grid.buffer.length, layout: grid.counts.join('+'), omitted,
   };
 }
 
@@ -52,8 +62,14 @@ export async function buildTargetGrid(items) {
  */
 export async function runTargetRaffle({
   runId, now = DateTime.now(), closesAt = null,
+  // When the draw was announced. The reminders are timed from it, and the
+  // ticker builds them long after, so `now` is the wrong clock for them.
+  openedAt = now,
   imageUrl = null, asDraft = true, publishLive = false,
   slots = null, prenamed = null,
+  // A draw HK started by hand keeps the names he gave or the sheet gave. The
+  // naming step works from Target's raw titles and would overwrite them.
+  keepNames = false,
   // The member Discord channel and role ping. Left unset the Discord posts
   // are skipped rather than queued to nowhere, which is what happens on a
   // deploy with no DISCORD_MEMBER_CHANNEL_ID.
@@ -80,7 +96,7 @@ export async function runTargetRaffle({
     return report;
   }
 
-  const naming = prenamed ?? await nameItems(items);
+  const naming = prenamed ?? (keepNames ? { items: items.map((i) => ({ ...i })) } : await nameItems(items));
   const named = orderedItems(
     naming.items.map((i, idx) => ({ ...items[idx], ...i, link: items[idx].link })),
   );
@@ -100,7 +116,7 @@ export async function runTargetRaffle({
     }
   }
 
-  const wanted = buildRafflePosts({ items: named, now, closesAt })
+  const wanted = buildRafflePosts({ items: named, now, closesAt, openedAt })
     .filter((p) => !slots || slots.has(p.slot));
 
   // Slot by slot rather than channel by channel, so the announcement lands on
@@ -191,6 +207,7 @@ export function summariseTarget(report) {
     lines.push(`  reddit     ${r.slot.padEnd(10)} r/${r.sub}`);
   }
   if (report.image) lines.push(`  grid       ${report.image.layout}, ${report.image.width}x${report.image.height}`);
+  if (report.image?.omitted?.length) lines.push(`  grid       left out: ${report.image.omitted.join('; ')}`);
   if (report.imageError) lines.push(`  grid       not built. ${report.imageError}`);
   if (report.errors.length) lines.push(`  errors: ${report.errors.join('; ')}`);
   return lines.join('\n');

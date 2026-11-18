@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
 import { isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems } from '../src/target-raffle.js';
-import { buildRafflePosts, raffleItemLines, deadlineClause, targetDiscordPosts } from '../src/target-copy.js';
+import {
+  buildRafflePosts, raffleItemLines, deadlineClause, targetDiscordPosts, productHeadline, raffleHeadline,
+} from '../src/target-copy.js';
 
 const now = DateTime.fromISO('2026-11-09T11:00', { zone: 'America/New_York' });
 
@@ -79,24 +81,79 @@ test('with no close time, only the live post is built', () => {
 test('with a close time, all three fire and Discord gets live plus closing', () => {
   const closesAt = now.plus({ days: 3 });
   const posts = buildRafflePosts({ items: [{ postName: 'A', link: 'x' }], now, closesAt });
-  assert.deepEqual(posts.map((p) => p.slot), ['live', 'morning', 'closing']);
+  assert.deepEqual(posts.map((p) => p.slot), ['live', 'night', 'closing']);
   assert.deepEqual(posts.map((p) => p.discord), [true, false, true]);
-  assert.equal(posts[1].dueAt.toFormat('ccc HH:mm'), 'Tue 09:00');
+  // 10PM Eastern the evening before the close, not the morning after opening.
+  assert.equal(posts[1].dueAt.toFormat('ccc HH:mm'), 'Wed 22:00');
   assert.equal(posts[2].dueAt.toISO(), closesAt.minus({ hours: 1 }).toISO());
 });
 
-test('the morning reminder is skipped on a draw that closes before it', () => {
-  // Opens 11AM, closes 8PM the same day: 9AM tomorrow is long past the close.
+test('the night reminder is skipped on a draw that closes the same day', () => {
+  // Opens 11AM, closes 8PM: 10PM the night before is before it even opened.
   const posts = buildRafflePosts({
     items: [{ postName: 'A', link: 'x' }], now, closesAt: now.set({ hour: 20 }),
   });
   assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
 });
 
-test('the morning reminder is skipped when it lands inside the final hour', () => {
-  const closesAt = now.plus({ days: 1 }).set({ hour: 9, minute: 30 });
+test('the night reminder is skipped when it lands within three hours of the announcement', () => {
+  // Announced 8PM, closes tomorrow 11AM: 10PM tonight would repeat the post.
+  const evening = now.set({ hour: 20 });
+  const posts = buildRafflePosts({
+    items: [{ postName: 'A', link: 'x' }], now: evening, closesAt: evening.plus({ days: 1 }).set({ hour: 11 }),
+  });
+  assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
+});
+
+test('the night reminder is skipped when it lands within two hours of the close', () => {
+  // Closes at midnight: 10PM the night before is two hours out, which is the
+  // closing post's stretch (it goes at 11PM).
+  const closesAt = now.plus({ days: 1 }).set({ hour: 0, minute: 0 });
   const posts = buildRafflePosts({ items: [{ postName: 'A', link: 'x' }], now, closesAt });
   assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
+});
+
+test('the night reminder is timed from the announcement, not from when it is built', () => {
+  const closesAt = DateTime.fromISO('2026-11-19T11:00', { zone: 'America/New_York' });
+  const openedAt = DateTime.fromISO('2026-11-18T13:00', { zone: 'America/New_York' });
+  // The ticker builds it at 9:45PM; the 3 hour rule must look at 1PM.
+  const posts = buildRafflePosts({
+    items: [{ postName: 'A', link: 'x' }], now: openedAt.set({ hour: 21, minute: 45 }), openedAt, closesAt,
+  });
+  assert.equal(posts.find((p) => p.slot === 'night').dueAt.toFormat('LLL d HH:mm'), 'Nov 18 22:00');
+});
+
+test('the headline names the products, folding variants and saying the set once', () => {
+  const items = [
+    { set: '30th Celebration', postName: '30th Celebration Ultra-Premium Collection - Day', link: 'a' },
+    { set: '30th Celebration', postName: '30th Celebration Ultra-Premium Collection - Night', link: 'b' },
+    { set: '30th Celebration', postName: '30th Celebration Ditto Premium Collection', link: 'c' },
+  ];
+  assert.equal(
+    productHeadline(items),
+    '30th Celebration Ultra-Premium Collection Day and Night and Ditto Premium Collection',
+  );
+  assert.equal(raffleHeadline(items), productHeadline(items));
+});
+
+test('sheet style variants, with no dash, fold the same way', () => {
+  const items = [
+    { set: '30th Celebration', postName: '30th Celebration Ultra Premium Collection Day', link: 'a' },
+    { set: '30th Celebration', postName: '30th Celebration Ultra Premium Collection Night', link: 'b' },
+    { set: '30th Celebration', postName: '30th Celebration Ditto Premium Collection', link: 'c' },
+  ];
+  assert.equal(
+    productHeadline(items),
+    '30th Celebration Ultra Premium Collection Day and Night and Ditto Premium Collection',
+  );
+});
+
+test('too many products, or too long a headline, falls back to the set names', () => {
+  const many = ['A', 'B', 'C', 'D'].map((x) => ({ set: 'Mega Evolution', postName: `Mega Evolution ${x} Box`, link: x }));
+  assert.equal(productHeadline(many), null);
+  assert.equal(raffleHeadline(many), 'Mega Evolution');
+  const long = [{ set: 'S', postName: 'X'.repeat(130), link: 'a' }];
+  assert.equal(raffleHeadline(long), 'S');
 });
 
 // As runTargetRaffle has it: the parsed embed merged with the naming step's
@@ -118,18 +175,18 @@ test('every beat states the deadline, which is why the close time is collected',
   const first = (p) => p.text.split('\n')[0];
   assert.equal(
     first(posts[0]),
-    '💫 Target 30th Celebration Draws Are Live Now! Entries Accepted by November 11 at 11AM EST / 8AM PST!',
+    '💫 Target 30th Celebration Booster Bundle Box Draws Are Live Now! Entries Accepted by November 11 at 11AM EST / 8AM PST!',
   );
   assert.match(first(posts[1]), /Still Open! Entries Accepted by November 11 at 11AM EST \/ 8AM PST!$/);
   // Inside the final hour the date is noise.
-  assert.equal(first(posts[2]), '💫 1 Hour Left to Enter the Target 30th Celebration Draws! Entries Close at 11AM EST / 8AM PST!');
+  assert.equal(first(posts[2]), '💫 1 Hour Left to Enter the Target 30th Celebration Booster Bundle Box Draws! Entries Close at 11AM EST / 8AM PST!');
   for (const p of posts) assert.doesNotMatch(p.text, /⏰/, 'no separate deadline block');
 });
 
 test('without a close time the announcement still goes out, with no deadline line', () => {
   const posts = buildRafflePosts({ items: SAMPLE, now, closesAt: null });
   assert.deepEqual(posts.map((p) => p.slot), ['live']);
-  assert.equal(posts[0].text.split('\n')[0], '💫 Target 30th Celebration Draws Are Live Now!');
+  assert.equal(posts[0].text.split('\n')[0], '💫 Target 30th Celebration Booster Bundle Box Draws Are Live Now!');
   assert.doesNotMatch(posts[0].text, /Entries/, 'no dangling deadline clause');
 });
 
@@ -147,9 +204,9 @@ const closesAt = DateTime.fromISO('2026-11-11T10:00', { zone: 'America/Chicago' 
 test('the member Discord posts are the live and closing beats only', () => {
   const posts = targetDiscordPosts({ items: SAMPLE, now, closesAt, role: '<@&123>' });
   assert.deepEqual(posts.map((p) => p.slot), ['live', 'closing']);
-  // Not the morning one: members got the announcement and will get the hour
+  // Not the night one: members got the announcement and will get the hour
   // warning, and a third ping is what makes people mute a role.
-  assert.ok(!posts.some((p) => p.slot === 'morning'));
+  assert.ok(!posts.some((p) => p.slot === 'night'));
 });
 
 test('the member posts use Discord timestamps rather than a written clock time', () => {

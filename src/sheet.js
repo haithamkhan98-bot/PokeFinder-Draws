@@ -79,7 +79,13 @@ function columnIndex(header, ...wanted) {
  * empty map. An empty map is indistinguishable from "no links known" and would
  * quietly post plain URLs for every item.
  */
-export function parseLinkSheet(csv) {
+const PLAIN_LINK = {
+  walmart: (sku) => `https://www.walmart.com/ip/PokeFinder/${sku}`,
+  target: (sku) => `https://www.target.com/p/PokeFinder/A-${sku}`,
+};
+
+export function parseLinkSheet(csv, { retailer = 'walmart' } = {}) {
+  const plainLink = PLAIN_LINK[retailer] ?? PLAIN_LINK.walmart;
   const rows = parseCsv(csv).filter((r) => r.some((c) => String(c).trim()));
   if (!rows.length) throw new Error('the sheet came back empty');
 
@@ -132,7 +138,7 @@ export function parseLinkSheet(csv) {
       product,
       // The sheet's own link wins over a constructed one: it is what HK
       // actually uses, and guessing the format is how a wrong slug creeps in.
-      link: /^https?:\/\//i.test(standard) ? standard : `https://www.walmart.com/ip/PokeFinder/${sku}`,
+      link: /^https?:\/\//i.test(standard) ? standard : plainLink(sku),
       // An empty cell and a placeholder both mean "no link yet". Treating the
       // placeholder as a link would post "[AFFILIATE LINK NEEDED]" as a URL.
       affiliate: /^\[.*\]$/.test(affiliate) || !/^https?:\/\//i.test(affiliate) ? null : affiliate,
@@ -165,10 +171,15 @@ export function conflictAlert(map, { mention = null, sheetUrl = null } = {}) {
     + `\n\n${lines.join('\n')}`;
 }
 
-let cache = { at: 0, map: null, url: null };
+/**
+ * One cached copy per sheet URL. The Walmart and Target tabs are published
+ * separately, and a single shared slot would have each load throw the other's
+ * copy away.
+ */
+const caches = new Map();
 
-/** Drop the cached sheet, so the next load refetches. For tests and for !sheetrefresh. */
-export const forgetSheet = () => { cache = { at: 0, map: null, url: null }; };
+/** Drop the cached sheets, so the next load refetches. For tests and for !sheet. */
+export const forgetSheet = () => { caches.clear(); };
 
 /**
  * The SKU to link map, cached in process.
@@ -182,12 +193,14 @@ export const forgetSheet = () => { cache = { at: 0, map: null, url: null }; };
  */
 export async function loadAffiliateLinks({
   url = process.env.WALMART_SHEET_CSV,
+  retailer = 'walmart',
   ttlMs = 5 * 60_000,
   fetchImpl = fetch,
   now = Date.now,
 } = {}) {
   if (!url) return null;
-  if (cache.map && cache.url === url && now() - cache.at < ttlMs) return cache.map;
+  const cache = caches.get(url);
+  if (cache && now() - cache.at < ttlMs) return cache.map;
 
   try {
     const res = await fetchImpl(url, { redirect: 'follow' });
@@ -196,17 +209,22 @@ export async function loadAffiliateLinks({
     // A published sheet that has been unpublished answers with an HTML error
     // page and HTTP 200, which would otherwise parse as one nonsense row.
     if (/^\s*</.test(text)) throw new Error('got HTML rather than CSV, so the sheet may have been unpublished');
-    const map = parseLinkSheet(text);
-    cache = { at: now(), map, url };
+    const map = parseLinkSheet(text, { retailer });
+    caches.set(url, { at: now(), map });
     return map;
   } catch (err) {
-    if (cache.map && cache.url === url) {
+    if (cache) {
       console.error(`sheet refresh failed, using the copy from ${new Date(cache.at).toISOString()}: ${err.message}`);
       return cache.map;
     }
     throw new Error(`could not read the affiliate sheet: ${err.message}`);
   }
 }
+
+/** The Target tab, which HK publishes as its own CSV. */
+export const loadTargetLinks = (opts = {}) => loadAffiliateLinks({
+  url: process.env.TARGET_SHEET_CSV, retailer: 'target', ...opts,
+});
 
 /** What the alert channel says about a load. */
 export function summariseSheet(map) {

@@ -51,6 +51,7 @@ import { openTargetRun, startTargetRun, addTargetItems, targetCloseTimeFor, setT
 import { lastSeenTargetItem, openAutoRunsWith, completeTargetRun, openManualTcins } from './db.js';
 import {
   parseDrawCommand, resolveDrawItems, unresolved, describeItems, fmt as fmtClose, USAGE as DRAW_USAGE,
+  closeFromEmbeds,
 } from './target-manual.js';
 import { embedListing } from './target-raffle.js';
 import { buildTargetGrid } from './target-run.js';
@@ -75,7 +76,9 @@ const {
   // time over several minutes rather than in a burst, and unlike a queue drop
   // there is no deadline to race: the draw is already open and runs for days,
   // so waiting costs nothing and firing early splits one draw into two runs.
-  TARGET_QUIET_PERIOD_MS = 600_000,
+  // Four minutes: the monitor now posts every listing in a draw within a
+  // couple of minutes of each other, so ten was only delaying the post.
+  TARGET_QUIET_PERIOD_MS = 240_000,
   TARGET_TICK_MS = 300_000,
   REDDIT_ENABLED,
   // 'manual' drops each post in the alert channel formatted to paste.
@@ -460,7 +463,10 @@ const batcher = new Batcher({
 const targetBatcher = new Batcher({
   quietMs: Number(TARGET_QUIET_PERIOD_MS),
   ceilingMs: Number(CEILING_MS),
-  keyOf: () => 'target',
+  // Keyed on the draw's close time, now that the embeds carry it. Listings
+  // closing together are one draw; a second draw with another deadline gets
+  // its own run instead of arriving "late" to the first and being dropped.
+  keyOf: (item) => (item.closesAt ? `closes:${item.closesAt.toMillis()}` : 'target'),
   onLate: async ({ item }) => {
     // Not a problem here, unlike the queue. A Target draw stays open, so a
     // late listing joins the run and shows up in the next reminder.
@@ -486,13 +492,34 @@ const targetBatcher = new Batcher({
         return;
       }
 
-      let run = await openTargetRun();
+      // The embed's Drawing Date. One batch is keyed on one close time, so
+      // the listings agree; the earliest is taken in case a batch keyed
+      // 'target' (no date) is mixed with dated ones.
+      const embedClose = usable.map((i) => i.closesAt).filter(Boolean)
+        .sort((a, b) => a.toMillis() - b.toMillis())[0] ?? null;
+
+      // The Target tab of the sheet backs up the monitor's link. HK sets that
+      // by hand, so a listing he has not got to yet still earns if the sheet
+      // has it.
+      if (process.env.TARGET_SHEET_CSV && usable.some((i) => !i.affiliate)) {
+        try {
+          const sheet = await loadTargetLinks();
+          for (const i of usable) {
+            const row = i.affiliate ? null : sheet?.get(String(i.tcin).replace(/\D/g, ''));
+            if (row?.affiliate) Object.assign(i, { link: row.affiliate, affiliate: true });
+          }
+        } catch (err) {
+          console.error(`target sheet unreadable, using the monitor links: ${err.message}`);
+        }
+      }
+
+      let run = await openTargetRun({ closesAt: embedClose ? embedClose.toJSDate() : null });
       const joining = Boolean(run);
-      if (!run) run = await startTargetRun({});
+      if (!run) run = await startTargetRun({ closesAt: embedClose ? embedClose.toJSDate() : null });
       const added = await addTargetItems(run.id, usable);
 
-      // The close time may already be known from an earlier bookmarklet click
-      // on any listing in this draw.
+      // No Drawing Date on the embed: fall back to a bookmarklet click on any
+      // listing in this draw.
       if (!run.closes_at) {
         const found = await targetCloseTimeFor(usable.map((i) => i.tcin));
         if (found) {
@@ -535,8 +562,8 @@ const targetBatcher = new Batcher({
         + `Headline: ${report.headline}\n`
         + `Listings: ${report.items}`
         + (dropped.length ? `, ${dropped.length} excluded (${dropped.map((i) => i.rawTitle).join('; ')})` : '')
-        + `\nCloses: ${closesAt ? closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') + ' ET' : 'UNKNOWN. Click the bookmarklet on any listing to set it, or the two reminders cannot be scheduled.'}`
-        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} from the monitor`
+        + `\nCloses: ${closesAt ? closesAt.setZone('America/New_York').toFormat('ccc LLL d, h:mma') + ' ET' + (embedClose ? ' (from the embed)' : ' (from the bookmarklet)') : 'UNKNOWN. The embeds had no Drawing Date. Click the bookmarklet on any listing to set it, or the reminders cannot be scheduled.'}`
+        + `\nAffiliate links: ${report.affiliate.covered}/${report.affiliate.total} from the monitor or sheet`
         + (report.affiliate.covered < report.affiliate.total ? ', the rest fall back to plain PokeFinder links' : '')
         + `\nPosts:\n${summariseTarget(report)}`,
       );
@@ -1546,16 +1573,18 @@ async function targetPasteBlocks() {
 
   const naming = await nameItems(usable);
   const named = orderedItems(naming.items.map((i, idx) => ({ ...usable[idx], ...i })));
-  const closes = await targetCloseTimeFor(named.map((i) => i.tcin));
-  if (!closes) {
+  // The embed's Drawing Date first, the bookmarklet only when there is none.
+  const embedClose = named.map((i) => i.closesAt).filter(Boolean)
+    .sort((a, b) => a.toMillis() - b.toMillis())[0] ?? null;
+  const closes = embedClose ? null : await targetCloseTimeFor(named.map((i) => i.tcin));
+  if (!embedClose && !closes) {
     return {
       error: `Found ${named.length} raffle listing(s) but no close time for any of them. `
-        + 'Both the member and Reddit posts are built around the countdown, so click the '
-        + 'bookmarklet on one listing first.',
+        + 'The embeds had no Drawing Date, so click the bookmarklet on one listing first.',
     };
   }
 
-  const closesAt = DateTime.fromJSDate(new Date(closes.closes_at));
+  const closesAt = embedClose ?? DateTime.fromJSDate(new Date(closes.closes_at));
   const now = DateTime.now();
   const et = (d) => d.setZone('America/New_York').toFormat('ccc LLL d, h:mma');
 
@@ -1657,7 +1686,16 @@ async function prepareTargetDraw(body) {
     });
   }
 
-  return { now, closesAt: parsed.closesAt, items: orderedItems(items), sheetNote };
+  let { closesAt } = parsed;
+  let closeNote = null;
+  if (!closesAt) {
+    const fromEmbeds = closeFromEmbeds(items, { now });
+    if (!fromEmbeds.ok) return { error: `Close time: ${fromEmbeds.reason}` };
+    closesAt = fromEmbeds.closesAt;
+    closeNote = 'Close time read from the monitor\'s Drawing Date.';
+  }
+
+  return { now, closesAt, items: orderedItems(items), sheetNote: [closeNote, sheetNote].filter(Boolean).join('\n') || null };
 }
 
 /**
@@ -2417,7 +2455,8 @@ client.once(Events.ClientReady, (c) => {
     console.log('bestbuy digests are OFF, set BESTBUY_ENABLED=true with the two channel IDs to turn them on');
   }
   if (flag(TARGET_ENABLED) && TARGET_CHANNEL_ID) {
-    console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}`);
+    console.log(`target raffles are ON, reading ${TARGET_CHANNEL_ID}, posting ${flag(TARGET_LIVE) ? 'LIVE' : 'to DRAFTS only'}, `
+      + `firing ${Number(TARGET_QUIET_PERIOD_MS) / 60_000}min after the last listing`);
   } else {
     console.log('automatic target raffles are OFF, set TARGET_ENABLED=true with TARGET_CHANNEL_ID to turn them on');
   }

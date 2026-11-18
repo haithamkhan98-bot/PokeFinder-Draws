@@ -20,7 +20,8 @@ import { skuKey } from './sheet.js';
  *   1012663804 30th Celebration Ditto Premium Collection
  *
  * One item per line, a TCIN or a Target URL, optionally followed by an
- * affiliate link and/or the name to post it under. Everything left out comes
+ * affiliate link and/or the name to post it under. The time line is optional
+ * once the monitor has posted the items: their embeds carry a Drawing Date. Everything left out comes
  * from the Target tab of the sheet, then from the last time the monitor saw
  * the item, then from Target's own page.
  *
@@ -134,21 +135,32 @@ export function parseDrawCommand(body, { now = DateTime.now() } = {}) {
   const lines = String(body ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
   if (!lines.length) return { ok: false, errors: [USAGE] };
 
+  // TCINs are 8 to 10 digits; nothing in a date or time is that long.
+  const startsItem = (t) => /^\d{8,10}$/.test(t) || isTargetUrl(t);
+
   let closeText;
   let itemLines;
   if (lines.length === 1) {
-    // TCINs are 8 to 10 digits; nothing in a date or time is that long.
     const tokens = lines[0].split(/\s+/);
-    const at = tokens.findIndex((t) => /^\d{8,10}$/.test(t) || isTargetUrl(t));
+    const at = tokens.findIndex(startsItem);
     if (at === -1) return { ok: false, errors: ['No items given.', USAGE] };
     closeText = tokens.slice(0, at).join(' ');
     itemLines = tokens.slice(at);
+  } else if (startsItem(lines[0].split(/\s+/)[0])) {
+    // No time line at all: the close comes from the monitor's Drawing Date.
+    closeText = '';
+    itemLines = lines;
   } else {
     [closeText, ...itemLines] = lines;
   }
 
-  const close = parseDrawClose(closeText, { now });
-  const errors = close.ok ? [] : [`Close time: ${close.reason}.`];
+  const errors = [];
+  let closesAt = null;
+  if (closeText) {
+    const close = parseDrawClose(closeText, { now });
+    if (close.ok) closesAt = close.closesAt;
+    else errors.push(`Close time: ${close.reason}.`);
+  }
 
   const items = [];
   for (const l of itemLines) {
@@ -161,7 +173,35 @@ export function parseDrawCommand(body, { now = DateTime.now() } = {}) {
   if (!items.length) errors.push('No items given.');
   if (items.length > MAX_ITEMS) errors.push(`${items.length} items is more than the ${MAX_ITEMS} a grid holds.`);
 
-  return errors.length ? { ok: false, errors } : { ok: true, closesAt: close.closesAt, items };
+  return errors.length ? { ok: false, errors } : { ok: true, closesAt, items };
+}
+
+/**
+ * The close time when HK gave none: the Drawing Date the monitor's embeds
+ * carry for these items. Every item has to have one and they have to agree,
+ * or the posts would state a deadline that is wrong for some of them.
+ */
+export function closeFromEmbeds(items, { now = DateTime.now() } = {}) {
+  const dated = items.filter((i) => i.closesAt);
+  const missing = items.filter((i) => !i.closesAt);
+  if (missing.length) {
+    return {
+      ok: false,
+      reason: `no Drawing Date from the monitor for ${missing.map((i) => i.tcin).join(', ')}. `
+        + 'Put the close time on the first line, e.g. `!targetdraw Nov 19 11am`.',
+    };
+  }
+  const times = [...new Set(dated.map((i) => i.closesAt.toMillis()))];
+  if (times.length > 1) {
+    return {
+      ok: false,
+      reason: `these items close at different times (${times.map((t) => fmt(DateTime.fromMillis(t))).join(', ')}). `
+        + 'Post them as separate draws, or put one close time on the first line.',
+    };
+  }
+  const closesAt = dated[0].closesAt.setZone(ET);
+  if (closesAt <= now) return { ok: false, reason: `the monitor says this draw closed ${fmt(closesAt)}` };
+  return { ok: true, closesAt };
 }
 
 export const USAGE = [
@@ -172,6 +212,7 @@ export const USAGE = [
   '1012850572',
   '1012663804 https://howl.link/abc 30th Celebration Ditto Premium Collection',
   '```',
+  'Leave the time line out and the bot uses the Drawing Date from the monitor\'s embeds.',
   'A link or a name after the TCIN overrides the sheet. `!targetdrawpreview` takes the same '
     + 'text and shows the posts without sending anything.',
 ].join('\n');
@@ -246,6 +287,7 @@ export async function resolveDrawItems(lines, {
       item.sources.link = 'plain';
     }
 
+    item.closesAt = embed?.closesAt ?? null;
     item.image = seen?.image_url ?? embed?.image ?? null;
     if (item.image) item.sources.image = seen?.image_url ? 'monitor' : 'embed';
 

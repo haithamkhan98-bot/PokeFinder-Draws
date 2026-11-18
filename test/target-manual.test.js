@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
 import {
-  parseDrawClose, parseDrawCommand, parseItemLine, sheetName, resolveDrawItems, unresolved,
+  parseDrawClose, parseDrawCommand, parseItemLine, sheetName, resolveDrawItems, unresolved, closeFromEmbeds,
 } from '../src/target-manual.js';
 import { parseLinkSheet } from '../src/sheet.js';
 import { readOgImage, readOgTitle } from '../src/target.js';
@@ -154,6 +154,26 @@ test('any Target monitor embed lends its listing, raffle or restock', () => {
     author: { name: 'Target Raffles' }, title: 'Ditto', url: 'https://howl.link/x',
     thumbnail: { url: 'https://img/x.jpg' }, fields: [{ name: 'Tcin', value: '1012663804' }],
   });
-  assert.deepEqual(l, { tcin: '1012663804', rawTitle: 'Ditto', link: 'https://howl.link/x', image: 'https://img/x.jpg' });
+  assert.deepEqual(l, { tcin: '1012663804', rawTitle: 'Ditto', link: 'https://howl.link/x', image: 'https://img/x.jpg', closesAt: null });
   assert.equal(embedListing({ author: { name: 'Walmart Droplist' }, fields: [{ name: 'Tcin', value: '1' }] }), null);
+});
+
+test('with no time line, the command takes the close from the monitor\'s Drawing Date', async () => {
+  const r = parseDrawCommand(' \n1012850570\n1012663804', { now });
+  assert.ok(r.ok, r.errors?.join());
+  assert.equal(r.closesAt, null);
+
+  const close = DateTime.fromSeconds(1795104000);
+  const embeds = new Map(r.items.map((i) => [i.tcin, { closesAt: close }]));
+  const items = await resolveDrawItems(r.items, { sheet: SHEET, embeds });
+  const got = closeFromEmbeds(items, { now });
+  assert.ok(got.ok);
+  assert.equal(got.closesAt.toMillis(), at('2026-11-19T11:00'));
+});
+
+test('a close from the embeds is refused when one is missing or they disagree', () => {
+  const a = { tcin: '1', closesAt: DateTime.fromSeconds(1795104000) };
+  assert.match(closeFromEmbeds([a, { tcin: '2', closesAt: null }], { now }).reason, /no Drawing Date .* 2/);
+  assert.match(closeFromEmbeds([a, { tcin: '2', closesAt: a.closesAt.plus({ hours: 1 }) }], { now }).reason, /different times/);
+  assert.match(closeFromEmbeds([a], { now: a.closesAt.plus({ minutes: 1 }) }).reason, /closed/);
 });

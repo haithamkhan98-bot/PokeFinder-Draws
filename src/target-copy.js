@@ -54,7 +54,7 @@ export function productHeadline(items) {
   // "Ditto Premium" and "Collection".
   const lastWordBase = (n) => n.replace(/\s+\S+$/, '');
   const split = (n) => {
-    const dash = n.match(/^(.*\S)\s+-\s+(.+)$/);
+    const dash = n.match(/^(.*\S)\s*-\s+(.+)$/);
     if (dash) return { base: dash[1], variant: dash[2] };
     const base = lastWordBase(n);
     const shared = base !== n && names.filter((x) => lastWordBase(x.name) === base).length > 1;

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DateTime } from 'luxon';
-import { isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems } from '../src/target-raffle.js';
+import {
+  isRaffleEmbed, parseTargetRaffle, raffleLink, usableRaffleItems, readDrawingDate,
+} from '../src/target-raffle.js';
 import {
   buildRafflePosts, raffleItemLines, deadlineClause, targetDiscordPosts, productHeadline, raffleHeadline,
 } from '../src/target-copy.js';
@@ -252,4 +254,55 @@ test('the tweets do not carry the winners note', () => {
   for (const p of buildRafflePosts({ items: SAMPLE, now, closesAt })) {
     assert.doesNotMatch(p.text, /24 hours/);
   }
+});
+
+// The embed as the monitor sends it since Nov 18: Type "Drawing Open" and a
+// Drawing Date field rendered from a Discord timestamp.
+const drawing = (over = {}) => embed({
+  title: 'Pokémon Trading Card Game: 30th Celebration Ultra-Premium Collection- Day',
+  fields: [
+    { name: 'Price', value: 'N/A USD' },
+    { name: 'Type', value: 'Drawing Open' },
+    { name: 'Tcin', value: '1012850570' },
+    { name: 'Queue Status', value: '🟢' },
+    { name: 'Raffle Status', value: '🟢' },
+    { name: 'Drawing Date', value: '<t:1795104000:f>' },
+  ],
+  ...over,
+});
+const nov18 = DateTime.fromISO('2026-11-18T12:54', { zone: 'America/New_York' });
+
+test('the close time comes off the embed, so the bookmarklet is not needed', () => {
+  const i = parseTargetRaffle(drawing(), { now: nov18 });
+  assert.ok(isRaffleEmbed(drawing()));
+  assert.equal(i.closesAt.toISO(), '2026-11-19T11:00:00.000-05:00');
+  assert.equal(i.type, 'Drawing Open');
+  assert.equal(parseTargetRaffle(embed(), { now }).closesAt, null, 'an older embed has none');
+});
+
+test('the Drawing Date reads as a timestamp or as written text', () => {
+  const want = '2026-11-19T11:00:00.000-05:00';
+  assert.equal(readDrawingDate('<t:1795104000:F>').toISO(), want);
+  assert.equal(readDrawingDate('<t:1795104000>').toISO(), want);
+  assert.equal(readDrawingDate('November 19, 2026 11:00 AM').toISO(), want, 'Eastern when unzoned');
+  assert.equal(readDrawingDate('November 19, 2026 10:00 AM CT').toISO(), want);
+  assert.equal(readDrawingDate('`November 19, 2026 11:00 AM`').toISO(), want, 'inline code');
+  assert.equal(readDrawingDate('soon'), null);
+  assert.equal(readDrawingDate(null), null);
+});
+
+test('a draw already closed, or a closing notice, is not announced', () => {
+  const open = parseTargetRaffle(drawing(), { now: nov18 });
+  assert.equal(usableRaffleItems([open], { now: nov18 }).length, 1);
+  assert.equal(usableRaffleItems([open], { now: open.closesAt.plus({ minutes: 1 }) }).length, 0);
+  const closed = { ...open, type: 'Drawing Closed' };
+  assert.equal(usableRaffleItems([closed], { now: nov18 }).length, 0);
+});
+
+test('the monitor\'s "Collection- Day" titles fold like any other variant', () => {
+  const items = [
+    { set: '30th Celebration', postName: '30th Celebration Ultra-Premium Collection- Day', link: 'a' },
+    { set: '30th Celebration', postName: '30th Celebration Ultra-Premium Collection- Night', link: 'b' },
+  ];
+  assert.equal(productHeadline(items), '30th Celebration Ultra-Premium Collection Day and Night');
 });

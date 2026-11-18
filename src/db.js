@@ -583,14 +583,25 @@ export async function targetCloseTimeFor(tcins) {
  * surprise, two genuinely separate draws open at once, into failed inserts and
  * lost items. Picking the newest open run degrades instead.
  */
-export async function openTargetRun() {
-  const { rows } = await pool.query(
-    // Automatic runs only. A monitor detected item joining a draw HK started
-    // by hand would put a product he did not name into his posts.
-    `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
-       FROM target_runs WHERE completed_at IS NULL AND NOT manual
-      ORDER BY opened_at DESC LIMIT 1`,
-  );
+export async function openTargetRun({ closesAt = null } = {}) {
+  // Automatic runs only. A monitor detected item joining a draw HK started
+  // by hand would put a product he did not name into his posts.
+  //
+  // Matched on the close time when there is one. The embeds carry it now, so
+  // two draws open at once with different deadlines stay two runs rather than
+  // the second quietly joining the first.
+  const { rows } = closesAt
+    ? await pool.query(
+      `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+         FROM target_runs WHERE completed_at IS NULL AND NOT manual AND closes_at = $1
+        ORDER BY opened_at DESC LIMIT 1`,
+      [closesAt],
+    )
+    : await pool.query(
+      `SELECT id, status, opened_at, closes_at, headline, image_url, announced_at
+         FROM target_runs WHERE completed_at IS NULL AND NOT manual
+        ORDER BY opened_at DESC LIMIT 1`,
+    );
   return rows[0] ?? null;
 }
 

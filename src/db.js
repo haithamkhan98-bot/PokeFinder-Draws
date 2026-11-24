@@ -522,6 +522,24 @@ export async function updatePendingDiscordPost({ runId, slot, body, imageUrl }) 
 }
 
 /**
+ * The member posts of a run that have already gone out, with the message they
+ * became, so a copy fix can be carried onto them by editing in place.
+ */
+export async function sentDiscordPosts(runId) {
+  const { rows } = await pool.query(
+    `SELECT id, slot, channel_id, message_id FROM discord_posts
+      WHERE run_id = $1 AND posted_at IS NOT NULL AND message_id IS NOT NULL`,
+    [runId],
+  );
+  return rows;
+}
+
+/** Record the edited wording of a member post already sent. */
+export async function setSentDiscordBody(id, body) {
+  await pool.query('UPDATE discord_posts SET body = $2 WHERE id = $1', [id, body]);
+}
+
+/**
  * Record when a Target draw closes.
  *
  * Overwrites rather than erroring on a repeat: HK may click the bookmarklet

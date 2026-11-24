@@ -14,7 +14,7 @@
  */
 import {
   TIPS, itemLines, otherHeading, orderedSets, otherLabels,
-  joinEnglish, shortDate, timeLabel,
+  joinEnglish, shortDate, timeLabel, orderedPokemon, orderedItems,
 } from './copy.js';
 import { stripGroupName, timeLabel as queueTimeLabel, whenPhrase } from './queue-copy.js';
 import { raffleHeadline, WINNERS_NOTE } from './target-copy.js';
@@ -60,9 +60,15 @@ export function tipsBlock() {
 
 const isPokemon = (i) => i.classification === 'pokemon' || !i.classification;
 
-/** Pokemon first and unlabelled, then the other games under their heading. */
+/**
+ * Pokemon first and unlabelled, then the other games under their heading.
+ *
+ * Ranked exactly as the tweets and the Discord posts rank them, by set and
+ * product shape. There is no reason for Reddit to list the same draw in a
+ * different order.
+ */
 export function drawItems(items) {
-  const poke = items.filter(isPokemon);
+  const poke = orderedPokemon(items.filter(isPokemon));
   const others = items.filter((i) => !isPokemon(i));
   const blocks = [];
   if (poke.length) blocks.push(bullets(itemLines(poke)));
@@ -185,7 +191,7 @@ export function targetRedditPosts({ items, now, closesAt, imageUrl = null }) {
   // Markdown links rather than a bare URL per line. Reddit renders them, so
   // the list reads as product names instead of a wall of target.com, and the
   // other channels' plain style does not have to carry over here.
-  const list = `Item List:\n\n${items
+  const list = `Item List:\n\n${orderedItems(items)
     .map((i) => `* [${i.postName ?? i.productName ?? i.rawTitle}](${i.link})`)
     .join('\n')}`;
 

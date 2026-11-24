@@ -22,7 +22,7 @@ import {
 import { startDiscordScheduler } from './discord-schedule.js';
 import { editPost, CHANNELS } from './buffer.js';
 import {
-  scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost,
+  scheduleDiscordPost, latestDrawRun, updatePendingDiscordPost, sentDiscordPosts, setSentDiscordBody,
   addDrawItems, drawBufferPosts, setRunImage,
 } from './db.js';
 import { isConnected as canvaConnected } from './canva.js';
@@ -1930,13 +1930,14 @@ async function bestbuyBackfill(message, raw) {
 }
 
 /**
- * `!drawrefresh` rebuilds the member Discord posts that have not gone out yet.
+ * `!drawrefresh` rebuilds the member Discord posts for the latest draw. Ones
+ * still pending are rewritten before they send; ones already sent are edited
+ * in place, without pinging again.
  *
  * The post bodies are written once when a run fires, so a copy change after
  * that leaves the rest of the day's posts carrying the old wording. This
- * rebuilds them from the stored run using the current code. Posts already
- * sent are left alone and so are the due times: this changes wording, not
- * the schedule.
+ * rebuilds them from the stored run using the current code. The due times
+ * are left alone: this changes wording, not the schedule.
  */
 async function drawRefresh(message) {
   if (!DISCORD_MEMBER_CHANNEL_ID) {
@@ -1972,8 +1973,29 @@ async function drawRefresh(message) {
       }
     }
 
+    // Posts already sent are edited in place. Discord does not ping again on
+    // an edit, so the corrected wording reaches the channel without a second
+    // notification, and the attached picture stays as it was.
+    const edited = [];
+    const failedEdits = [];
+    for (const row of await sentDiscordPosts(run.id)) {
+      const p = posts.find((x) => x.slot === row.slot);
+      if (!p) continue;
+      try {
+        const channel = await client.channels.fetch(row.channel_id);
+        const msg = await channel.messages.fetch(row.message_id);
+        await msg.edit({ content: p.text.slice(0, 1990), allowedMentions: { parse: [] } });
+        await setSentDiscordBody(row.id, p.text);
+        edited.push(row.slot);
+      } catch (err) {
+        failedEdits.push(`${row.slot}: ${err.message}`);
+      }
+    }
+
     await message.reply(
-      `Rebuilt the member posts for ${run.draw_date} from ${named.length} item(s), `
+      (edited.length ? `Edited ${edited.length} post(s) already sent: ${edited.join(', ')}.\n` : '')
+      + (failedEdits.length ? `Could not edit: ${failedEdits.join('; ')}.\n` : '')
+      + `Rebuilt the member posts for ${run.draw_date} from ${named.length} item(s), `
       + `naming from the ${naming.source}${naming.note ? ` (${naming.note})` : ''}.\n`
       + (updated.length
         ? `Updated ${updated.length} pending post(s): ${updated.join(', ')}.`

@@ -102,11 +102,11 @@ test('a midday draw moves its anchors', () => {
   assert.equal(at('over'), '13:00');
 });
 
-test('30th Anniversary leads the set list however the items arrive', () => {
-  assert.equal(setsLabel(['Prismatic Evolutions', '30th Anniversary']), '30th Anniversary and Prismatic Evolutions');
+test('30th Celebration leads the set list however the items arrive', () => {
+  assert.equal(setsLabel(['Prismatic Evolutions', '30th Anniversary']), '30th Celebration and Prismatic Evolutions');
   assert.equal(
     setsLabel(['Ascended Heroes', 'Prismatic Evolutions', '30th Anniversary']),
-    '30th Anniversary, Ascended Heroes and Prismatic Evolutions',
+    '30th Celebration, Ascended Heroes and Prismatic Evolutions',
   );
 });
 
@@ -120,7 +120,7 @@ test('several sets make the noun plural', () => {
     ],
     sets: ['30th Anniversary', 'Prismatic Evolutions'], startsAt, endsAt,
   });
-  assert.match(multi[0].text, /^💫 New 30th Anniversary and Prismatic Evolutions Walmart Draws Beginning/);
+  assert.match(multi[0].text, /^💫 New 30th Celebration and Prismatic Evolutions Walmart Draws Beginning/);
 });
 
 test('times and short dates are written the way the posts write them', () => {
@@ -200,7 +200,7 @@ test('Pokemon sets lead the headline and the other categories follow', () => {
     // Sports cards are in the item list but not the headline: naming them
     // spends the most valuable words in the post on what the audience came
     // for least.
-    '💫 New 30th Anniversary, Prismatic Evolutions and One Piece TCG Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
+    '💫 New 30th Celebration, Prismatic Evolutions and One Piece TCG Walmart Draws Beginning 10/26 at 5PM EST / 2PM PST!',
   );
 });
 
@@ -307,7 +307,7 @@ test('every member post fits inside a Discord message', () => {
   }
 });
 
-import { orderedPokemon, setRank, orderedSets } from '../src/copy.js';
+import { orderedPokemon, setRank, orderedSets, canonicalName } from '../src/copy.js';
 
 // The list used to run in monitor arrival order while the headline was
 // sorted, so a draw could announce 30th Celebration and then list it third.
@@ -330,12 +330,12 @@ test('30th Celebration leads the product list however the items arrive', () => {
     < text.indexOf('Prismatic Evolutions Booster Bundle'));
 });
 
-test('30th Celebration outranks 30th Anniversary, and both outrank the rest', () => {
-  assert.ok(setRank('30th Celebration') < setRank('30th Anniversary'));
-  assert.ok(setRank('30th Anniversary') < setRank('Prismatic Evolutions'));
+test('30th Anniversary is the same set as 30th Celebration, so it is named once', () => {
+  assert.equal(canonicalName('30th Anniversary D7 4-Pack Tin'), '30th Celebration D7 4-Pack Tin');
+  assert.ok(setRank('30th Celebration') < setRank('Prismatic Evolutions'));
   assert.deepEqual(
-    orderedSets(['Prismatic Evolutions', '30th Anniversary', '30th Celebration']),
-    ['30th Celebration', '30th Anniversary', 'Prismatic Evolutions'],
+    orderedSets(['Prismatic Evolutions', '30th Anniversary', '30th Celebration', 'Delta Reign']),
+    ['30th Celebration', 'Prismatic Evolutions', 'Delta Reign'],
   );
 });
 

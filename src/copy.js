@@ -61,8 +61,20 @@ export const setRank = (s) => {
   return 2;
 };
 
+/**
+ * One name for the 30th anniversary product line.
+ *
+ * Walmart sometimes loads a title as "30th Anniversary" where the line is
+ * "30th Celebration". They are the same set, and a headline reading
+ * "30th Celebration, 30th Anniversary, ..." names it twice, so every name is
+ * written "30th Celebration" whatever the retailer called it.
+ */
+export const canonicalName = (s) => (s == null ? s
+  : String(s).replace(/\b30th\s+anniversary\b/gi, '30th Celebration'));
+
 export function orderedSets(sets) {
-  return [...sets].sort((a, b) => setRank(a) - setRank(b) || sets.indexOf(a) - sets.indexOf(b));
+  const unique = [...new Set(sets.map(canonicalName))];
+  return unique.sort((a, b) => setRank(a) - setRank(b) || unique.indexOf(a) - unique.indexOf(b));
 }
 
 export const pokemonSetsLabel = (sets) => joinEnglish(orderedSets(sets));

@@ -28,7 +28,8 @@ test('local naming fills set and postName for every item', () => {
     { pid: '2', rawTitle: 'Pokemon TCG 30th Anniversary Elite Trainer Box', productName: '30th Anniversary Elite Trainer Box' },
   ]);
   assert.equal(named[0].set, 'Prismatic Evolutions');
-  assert.equal(named[1].set, '30th Anniversary');
+  assert.equal(named[1].set, '30th Celebration', 'one name for the line');
+  assert.equal(named[1].postName, '30th Celebration Elite Trainer Box');
   assert.ok(named.every((i) => i.postName && !/Pokemon/i.test(i.postName)));
 });
 

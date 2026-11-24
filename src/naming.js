@@ -1,4 +1,4 @@
-import { setsLabel } from './copy.js';
+import { setsLabel, canonicalName } from './copy.js';
 
 const API = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
@@ -10,7 +10,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
  * something unusable.
  */
 export const KNOWN_SETS = [
-  '30th Anniversary', '30th Celebration', 'Ascended Heroes', 'Phantasmal Flames',
+  '30th Celebration', 'Ascended Heroes', 'Phantasmal Flames',
   'Prismatic Evolutions', 'Destined Rivals', 'Perfect Order', 'Chaos Rising',
   'Pitch Black', 'Black Bolt', 'White Flare', 'Mega Evolution', 'Delta Reign', '151',
 ].sort((a, b) => b.length - a.length);
@@ -40,7 +40,7 @@ const SERIES_PREFIX = new RegExp(
 );
 
 const NOISE = [
-  /^Pok[eé]mon Trading Card Games?:?/i, /^Pok[eé]mon TCGs?:?/i, /Scarlet\s*&?\s*Violet[-—:]?/i,
+  /^Pok[eé]mon Trading Card Games?:?/i, /^Pok[eé]mon TCGs?:?/i, /^Pok[eé]mon\b:?/i, /Scarlet\s*&?\s*Violet[-—:]?/i,
   /\bSV\s*\d+(\.\d+)?\b/i, /\b20\d\d\b/,
 ];
 
@@ -48,7 +48,7 @@ const NOISE = [
 export function cleanTitle(raw) {
   let t = String(raw || '');
   for (const re of NOISE) t = t.replace(re, ' ');
-  t = t.replace(/\s+/g, ' ').replace(SERIES_PREFIX, '');
+  t = canonicalName(t.replace(/\s+/g, ' ').replace(SERIES_PREFIX, ''));
   return t.replace(/\s+/g, ' ').replace(/^[\s:—-]+|[\s:—-]+$/g, '').trim();
 }
 
@@ -73,9 +73,10 @@ Return JSON only, no prose, in this exact shape:
 {"items":[{"pid":"...","set":"...","postName":"..."}]}
 
 Rules:
-- "set" is the set name alone, for example "Prismatic Evolutions", "30th Anniversary", "Ascended Heroes". Never include the publisher, the word Pokemon, or "Scarlet & Violet".
+- "set" is the set name alone, for example "Prismatic Evolutions", "30th Celebration", "Ascended Heroes". Never include the publisher, the word Pokemon, or "Scarlet & Violet".
 - "postName" is how the product is written in a post: the set name followed by the product, for example "Prismatic Evolutions Booster Bundle 2-Pack" or "30th Celebration Elite Trainer Box".
 - Keep the retailer's own pack counts and variant names, hyphenated the way a person would write them ("2-Pack", "3-Pack Blister").
+- "30th Anniversary" and "30th Celebration" are the same set. Always write it "30th Celebration", in both "set" and "postName".
 - Strip "Pokemon Trading Card Game", "Pokemon TCG", "Scarlet & Violet" and years.
 - "Mega Evolution" is a master set. When a set follows it, drop it: "Mega Evolution Delta Reign Elite Trainer Box" is set "Delta Reign", postName "Delta Reign Elite Trainer Box". When nothing follows it, it IS the set: "Mega Evolution Elite Trainer Box" keeps its name.
 - Do not invent products, do not merge items, and return exactly one entry per pid.
@@ -129,7 +130,7 @@ export async function nameItems(items, { timeoutMs = 30_000 } = {}) {
     const named = local.map((item) => {
       const got = byPid.get(String(item.pid));
       if (!got?.set || !got?.postName) return item;
-      return { ...item, set: got.set, postName: got.postName };
+      return { ...item, set: canonicalName(got.set), postName: canonicalName(got.postName) };
     });
 
     const missing = named.filter((i) => !i.set);
